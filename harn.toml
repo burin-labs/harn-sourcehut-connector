@@ -1,0 +1,41 @@
+[package]
+name = "harn-sourcehut-connector"
+version = "0.0.0"
+description = "Pure-Harn SourceHut connector: Ed25519-signed webhooks plus GraphQL/REST passthrough helpers."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/burin-labs/harn-sourcehut-connector"
+connector_contract = "v1"
+
+[exports]
+default = "src/lib.harn"
+
+[[providers]]
+id = "sourcehut"
+connector = { harn = "src/lib.harn" }
+
+[dependencies]
+
+[connector_contract]
+version = 1
+
+[[connector_contract.fixtures]]
+provider = "sourcehut"
+name = "happy path"
+kind = "webhook"
+headers = { "x-sourcehut-event" = "repo.push", "x-sourcehut-delivery" = "delivery-1" }
+body_json = { event = "repo.push", repository = { name = "~ada/widgets" }, pusher = { canonical_name = "~ada" }, commits = [{ id = "abc123" }] }
+expect_type = "event"
+expect_kind = "repo.push"
+expect_signature_state = "unsigned"
+expect_event_count = 1
+expect_payload_contains = { provider = "sourcehut", raw = { event = "repo.push" } }
+
+[[connector_contract.fixtures]]
+provider = "sourcehut"
+name = "malformed payload"
+kind = "webhook"
+headers = { "x-sourcehut-event" = "repo.push" }
+body = "{not json"
+expect_type = "reject"
+expect_response_status = 400
+expect_event_count = 0

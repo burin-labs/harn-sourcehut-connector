@@ -1,0 +1,62 @@
+import {
+  activate,
+  call,
+  init,
+  kinds,
+  normalize_inbound,
+  payload_schema,
+  poll_tick,
+  provider_id,
+  shutdown,
+} from "../src/lib"
+
+@complexity(allow)
+pipeline default() {
+  shutdown()
+  assert_eq(provider_id(), "sourcehut", "provider id")
+  assert_eq(kinds()[0], "webhook", "first kind")
+  assert_eq(payload_schema().harn_schema_name, "SourceHutEventPayload", "schema")
+  init({signing_secret: "secret"})
+  let activated = activate([{id: "primary", path: "/hooks/sourcehut", secrets: {signing_secret: "secret"}}])
+  assert_eq(activated.bindings, 1, "activation count")
+  let body = "{\"event\":\"repo.push\",\"repository\":{\"name\":\"~ada/widgets\",\"url\":\"https://git.sr.ht/~ada/widgets\"},\"pusher\":{\"canonical_name\":\"~ada\"},\"commits\":[{\"id\":\"abc123\"}]}"
+  let headers = {["x-sourcehut-event"]: "repo.push", ["x-sourcehut-delivery"]: "delivery-1"}
+  let keypair = ed25519_keypair()
+  let signature = ed25519_sign(keypair.private, body)
+  let raw = {
+    public_key: keypair.public,
+    body_text: body,
+    headers: headers + {["x-sourcehut-signature"]: "ed25519=" + signature},
+  }
+  let normalized = normalize_inbound(raw)
+  assert_eq(normalized.type, "event", "envelope type")
+  assert_eq(normalized.event.kind, "repo.push", "event kind")
+  assert_eq(normalized.event.signature_status.state, "verified", "signed status")
+  assert(normalized.event.dedupe_key != nil && normalized.event.dedupe_key != "", "dedupe key")
+  let bad_signature = normalize_inbound(
+    {
+    public_key: keypair.public,
+    body_text: body,
+    headers: headers + {["x-sourcehut-signature"]: "ed25519=00"},
+  },
+  )
+  assert_eq(bad_signature.type, "reject", "bad signature rejects")
+  assert_eq(bad_signature.reject.status, 401, "bad signature status")
+  let invalid_json = normalize_inbound({body_text: "{bad json", headers: headers})
+  assert_eq(invalid_json.type, "reject", "invalid json rejects")
+  http_mock_clear()
+  http_mock(
+    "GET",
+    "https://git.sr.ht/query/projects",
+    {status: 200, body: json_stringify({ok: true})},
+  )
+  let response = call(
+    "api.request",
+    {api_base_url: "https://git.sr.ht/query", path: "/projects", access_token: "token"},
+  )
+  assert_eq(response.ok, true, "api request")
+  let unsupported = call("unknown", {})
+  assert(is_err(unsupported), "unknown method errors")
+  http_mock_clear()
+  shutdown()
+}
