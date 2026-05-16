@@ -5,19 +5,18 @@ import {
   kinds,
   normalize_inbound,
   payload_schema,
-  poll_tick,
   provider_id,
   shutdown,
 } from "../src/lib"
 
 @complexity(allow)
-pipeline default() {
+pipeline test_sourcehut_connector(task) {
   shutdown()
   assert_eq(provider_id(), "sourcehut", "provider id")
   assert_eq(kinds()[0], "webhook", "first kind")
   assert_eq(payload_schema().harn_schema_name, "SourceHutEventPayload", "schema")
-  init({signing_secret: "secret"})
-  let activated = activate([{id: "primary", path: "/hooks/sourcehut", secrets: {signing_secret: "secret"}}])
+  init()
+  let activated = activate([{id: "primary", path: "/hooks/sourcehut"}])
   assert_eq(activated.bindings, 1, "activation count")
   let body = "{\"event\":\"repo.push\",\"repository\":{\"name\":\"~ada/widgets\",\"url\":\"https://git.sr.ht/~ada/widgets\"},\"pusher\":{\"canonical_name\":\"~ada\"},\"commits\":[{\"id\":\"abc123\"}]}"
   let headers = {"x-sourcehut-event": "repo.push", "x-sourcehut-delivery": "delivery-1"}
@@ -42,6 +41,22 @@ pipeline default() {
   )
   assert_eq(bad_signature.type, "reject", "bad signature rejects")
   assert_eq(bad_signature.reject.status, 401, "bad signature status")
+  shutdown()
+  init({public_key: keypair.public})
+  let missing_signature = normalize_inbound({body_text: body, headers: headers})
+  assert_eq(
+    missing_signature.type,
+    "reject",
+    "missing signature rejects when a public key is configured",
+  )
+  assert_eq(missing_signature.reject.status, 401, "missing signature status")
+  let alternate_signature_header = normalize_inbound({body_text: body, headers: headers + {"x-srht-signature": signature}})
+  assert_eq(alternate_signature_header.type, "event", "alternate signature header verifies")
+  assert_eq(
+    alternate_signature_header.event.signature_status.state,
+    "verified",
+    "alternate signed status",
+  )
   let invalid_json = normalize_inbound({body_text: "{bad json", headers: headers})
   assert_eq(invalid_json.type, "reject", "invalid json rejects")
   http_mock_clear()
@@ -55,6 +70,119 @@ pipeline default() {
     {api_base_url: "https://git.sr.ht/query", path: "/projects", access_token: "token"},
   )
   assert_eq(response.ok, true, "api request")
+  http_mock_clear()
+  shutdown()
+  init()
+  http_mock(
+    "GET",
+    "https://git.sr.ht/query/projects",
+    {
+      status: 200,
+      headers: {"x-ratelimit-limit": "10", "x-ratelimit-remaining": "9", "x-ratelimit-reset": "1776859300"},
+      body: json_stringify({ok: true}),
+    },
+  )
+  let metered = call(
+    "api.request",
+    {
+      api_base_url: "https://git.sr.ht/query",
+      path: "/projects",
+      access_token: "token",
+      include_meta: true,
+      rate_limit: {capacity: 1, refill_tokens: 1, refill_interval_ms: 1000},
+      now_ms: 1000,
+    },
+  )
+  assert_eq(metered.meta.rate_limit.requests_remaining, 9, "rate-limit response metadata")
+  let bucket_limited = call(
+    "api.request",
+    {
+      api_base_url: "https://git.sr.ht/query",
+      path: "/projects",
+      access_token: "token",
+      rate_limit: {capacity: 1, refill_tokens: 1, refill_interval_ms: 1000},
+      now_ms: 1000,
+    },
+  )
+  assert(is_err(bucket_limited), "token bucket blocks exhausted scope")
+  assert_eq(unwrap_err(bucket_limited).code, "rate_limited", "token bucket error code")
+  assert_eq(unwrap_err(bucket_limited).retry_after_ms, 1000, "token bucket retry after")
+  http_mock_clear()
+  http_mock(
+    "GET",
+    "https://git.sr.ht/query/projects",
+    {
+      status: 429,
+      headers: {"retry-after": "2", "x-ratelimit-remaining": "0"},
+      body: json_stringify({message: "slow down"}),
+    },
+  )
+  let header_limited = call(
+    "api.request",
+    {
+      api_base_url: "https://git.sr.ht/query",
+      path: "/projects",
+      access_token: "token",
+      rate_limit: false,
+    },
+  )
+  assert(is_err(header_limited), "429 rate limit rejects")
+  assert_eq(unwrap_err(header_limited).code, "rate_limited", "429 error code")
+  assert_eq(unwrap_err(header_limited).meta.rate_limit.retry_after_ms, 2000, "429 retry after")
+  http_mock_clear()
+  http_mock(
+    "GET",
+    "https://git.sr.ht/query/projects",
+    {
+      status: 403,
+      headers: {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1776859300"},
+      body: json_stringify({message: "primary rate limit"}),
+    },
+  )
+  let exhausted = call(
+    "api.request",
+    {
+      api_base_url: "https://git.sr.ht/query",
+      path: "/projects",
+      access_token: "token",
+      rate_limit: false,
+    },
+  )
+  assert(is_err(exhausted), "403 with exhausted rate-limit headers rejects")
+  assert_eq(unwrap_err(exhausted).code, "rate_limited", "403 exhausted rate-limit code")
+  http_mock_clear()
+  http_mock(
+    "POST",
+    "https://git.sr.ht/query",
+    {
+      responses: [
+        {
+          status: 200,
+          body: json_stringify({data: {repositories: {results: [{name: "alpha"}], cursor: "page-2"}}}),
+        },
+        {
+          status: 200,
+          body: json_stringify({data: {repositories: {results: [{name: "beta"}], cursor: nil}}}),
+        },
+      ],
+    },
+  )
+  let paged = call(
+    "graphql.paginate",
+    {
+      api_base_url: "https://git.sr.ht/query",
+      access_token: "token",
+      query: "query Repositories($cursor: Cursor) { repositories(cursor: $cursor) { results { name } cursor } }",
+      page_path: "/repositories",
+      rate_limit: false,
+    },
+  )
+  assert_eq(len(paged.items), 2, "cursor pagination item count")
+  assert_eq(paged.items[0].name, "alpha", "first paginated item")
+  assert_eq(paged.items[1].name, "beta", "second paginated item")
+  assert_eq(paged.complete, true, "cursor pagination complete")
+  let calls = http_mock_calls({include_sensitive: true})
+  assert(contains(calls[1].body, "\"cursor\":\"page-2\""), "second page uses cursor")
   let unsupported = call("unknown", {})
   assert(is_err(unsupported), "unknown method errors")
   http_mock_clear()

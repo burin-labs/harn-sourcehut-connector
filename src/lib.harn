@@ -1,3 +1,6 @@
+import { paginate_cursor, rate_limit_token_bucket } from "std/connectors/shared"
+import { graphql_normalize_response, graphql_request_body } from "std/graphql"
+
 let PROVIDER_ID = "sourcehut"
 
 let STATE_KEY = "harn-sourcehut-connector.state"
@@ -5,8 +8,6 @@ let STATE_KEY = "harn-sourcehut-connector.state"
 let DEFAULT_API_BASE_URL = "https://git.sr.ht/query"
 
 let ENV_PREFIX = "SOURCEHUT"
-
-let SIGNATURE_SCHEME = "sourcehut_ed25519"
 
 let SIGNATURE_HEADER = "x-sourcehut-signature"
 
@@ -26,6 +27,9 @@ let DELIVERY_HEADERS = ["x-sourcehut-delivery", "x-srht-delivery"]
 
 let OUTBOUND_METHODS = [
   "api.request",
+  "api.paginate",
+  "graphql.request",
+  "graphql.paginate",
   "pull_requests.comment",
   "pull_requests.update",
   "issues.comment",
@@ -157,6 +161,12 @@ pub fn call(method, args = {}) {
   if method == "api.request" {
     return __api_request(args ?? {})
   }
+  if method == "api.paginate" || method == "graphql.paginate" {
+    return __graphql_paginate(args ?? {})
+  }
+  if method == "graphql.request" {
+    return __graphql_request(args ?? {})
+  }
   if method == "pull_requests.comment" {
     return __api_request(
       args
@@ -213,6 +223,12 @@ fn __err(code, message) {
   return Err({code: code, message: message})
 }
 
+fn __err_meta(code, message, meta = nil) {
+  let base = meta ?? {}
+  let payload = base + {code: code, message: message}
+  return Err(payload)
+}
+
 fn __reject(status, code, message) {
   return {
     type: "reject",
@@ -267,28 +283,11 @@ fn __supports_event(event) {
 
 @complexity(allow)
 fn __verify_signature(raw, headers, body_text) {
-  if SIGNATURE_SCHEME == "sourcehut_ed25519" {
-    return __verify_ed25519(raw, headers, body_text)
-  }
-  let secret = __signing_secret(raw)
-  if secret == nil || trim(to_string(secret)) == "" {
-    return Ok("unsigned")
-  }
-  let provided = __header(headers, SIGNATURE_HEADER)
-  if provided == nil || provided == "" {
-    return __err("missing_signature", SIGNATURE_HEADER + " header missing but a signing_secret is configured")
-  }
-  let expected_hex = hmac_sha256(to_string(secret), body_text)
-  let expected = "sha256=" + expected_hex
-  if constant_time_eq(expected, to_string(provided))
-    || constant_time_eq(expected_hex, to_string(provided)) {
-    return Ok("signed")
-  }
-  return __err("invalid_signature", SIGNATURE_HEADER + " did not match the configured signing_secret")
+  return __verify_ed25519(raw, headers, body_text)
 }
 
 fn __verify_ed25519(raw, headers, body_text) {
-  let public_key = raw?.public_key ?? raw?.webhook_public_key ?? raw?.config?.public_key ?? raw?.secrets?.public_key
+  let public_key = __webhook_public_key(raw)
   if public_key == nil || trim(to_string(public_key)) == "" {
     return Ok("unsigned")
   }
@@ -307,6 +306,55 @@ fn __verify_ed25519(raw, headers, body_text) {
   return Ok("signed")
 }
 
+@complexity(allow)
+fn __webhook_public_key(raw) {
+  let direct = raw?.public_key ?? raw?.webhook_public_key ?? raw?.config?.public_key ?? raw?.secrets?.public_key
+    ?? raw?.metadata?.public_key
+  if direct != nil && trim(to_string(direct)) != "" {
+    return to_string(direct)
+  }
+  let secret_id = raw?.public_key_secret ?? raw?.webhook_public_key_secret ?? raw?.metadata?.secret_ids?.public_key
+  if secret_id != nil && trim(to_string(secret_id)) != "" {
+    return secret_get(to_string(secret_id))
+  }
+  let state = __state()
+  let ctx_key = state?.ctx?.public_key ?? state?.ctx?.webhook_public_key ?? state?.ctx?.secrets?.public_key
+  if ctx_key != nil && trim(to_string(ctx_key)) != "" {
+    return to_string(ctx_key)
+  }
+  let bindings = state?.bindings ?? {}
+  let binding_id = raw?.metadata?.binding_id ?? raw?.binding_id
+  if binding_id != nil {
+    let binding = bindings.get(binding_id)
+    return binding?.public_key ?? binding?.webhook_public_key ?? binding?.secrets?.public_key
+      ?? binding?.config?.public_key
+  }
+  let values = bindings.values()
+  if len(values) == 1 {
+    let binding = values[0]
+    return binding?.public_key ?? binding?.webhook_public_key ?? binding?.secrets?.public_key
+      ?? binding?.config?.public_key
+  }
+  let default_key = __secret_get_optional(PROVIDER_ID + "/webhook-public-key")
+  if default_key != nil && trim(to_string(default_key)) != "" {
+    return default_key
+  }
+  return nil
+}
+
+fn __secret_get_optional(secret_id) {
+  if secret_id == nil || trim(to_string(secret_id)) == "" {
+    return nil
+  }
+  let resolved = try {
+    secret_get(to_string(secret_id))
+  }
+  if is_err(resolved) {
+    return nil
+  }
+  return to_string(unwrap(resolved))
+}
+
 fn __strip_signature_prefix(signature) {
   let value = trim(to_string(signature))
   if starts_with(value, "ed25519=") {
@@ -316,31 +364,6 @@ fn __strip_signature_prefix(signature) {
     return value[7:len(value)]
   }
   return value
-}
-
-fn __signing_secret(raw) {
-  let direct = raw?.signing_secret ?? raw?.secret ?? raw?.webhook_secret ?? raw?.config?.signing_secret
-    ?? raw?.secrets?.signing_secret
-  if direct != nil && trim(to_string(direct)) != "" {
-    return to_string(direct)
-  }
-  let state = __state()
-  let ctx_secret = state?.ctx?.signing_secret ?? state?.ctx?.secrets?.signing_secret
-  if ctx_secret != nil && trim(to_string(ctx_secret)) != "" {
-    return to_string(ctx_secret)
-  }
-  let bindings = state?.bindings ?? {}
-  let binding_id = raw?.metadata?.binding_id ?? raw?.binding_id
-  if binding_id != nil {
-    let binding = bindings.get(binding_id)
-    return binding?.signing_secret ?? binding?.secrets?.signing_secret ?? binding?.config?.signing_secret
-  }
-  let values = bindings.values()
-  if len(values) == 1 {
-    let binding = values[0]
-    return binding?.signing_secret ?? binding?.secrets?.signing_secret ?? binding?.config?.signing_secret
-  }
-  return nil
 }
 
 @complexity(allow)
@@ -455,7 +478,20 @@ fn __outbound_config(args) {
 }
 
 fn __config_keys() {
-  return ["api_base_url", "access_token", "token", "personal_access_token", "app_password", "secrets"]
+  return [
+    "api_base_url",
+    "access_token",
+    "token",
+    "personal_access_token",
+    "app_password",
+    "secrets",
+    "rate_limit",
+    "rate_limit_config",
+    "rate_limit_scope",
+    "now_ms",
+    "include_meta",
+    "return_envelope",
+  ]
 }
 
 fn __body_without(args, keys) {
@@ -466,6 +502,103 @@ fn __body_without(args, keys) {
   return body
 }
 
+fn __int_header(headers, name) {
+  let value = __header(headers ?? {}, name)
+  if value == nil || trim(to_string(value)) == "" {
+    return nil
+  }
+  let parsed = try {
+    to_int(value)
+  }
+  if is_ok(parsed) {
+    return unwrap(parsed)
+  }
+  return nil
+}
+
+fn __rate_limit_meta(headers) {
+  let retry_after_seconds = __int_header(headers, "retry-after") ?? __int_header(headers, "x-ratelimit-retry-after")
+  return {
+    requests_limit: __int_header(headers, "x-ratelimit-limit") ?? __int_header(headers, "ratelimit-limit"),
+    requests_remaining: __int_header(headers, "x-ratelimit-remaining") ?? __int_header(headers, "ratelimit-remaining"),
+    requests_reset: __int_header(headers, "x-ratelimit-reset") ?? __int_header(headers, "ratelimit-reset"),
+    retry_after_seconds: retry_after_seconds,
+    retry_after_ms: if retry_after_seconds == nil {
+      nil
+    } else {
+      retry_after_seconds * 1000
+    },
+  }
+}
+
+fn __response_meta(response) {
+  return {
+    status: response?.status,
+    request_id: __header(response?.headers ?? {}, "x-request-id")
+      ?? __header(response?.headers ?? {}, "x-srht-request-id"),
+    rate_limit: __rate_limit_meta(response?.headers ?? {}),
+  }
+}
+
+fn __rate_limit_enabled(args) {
+  if type_of(args?.rate_limit) == "bool" && !args.rate_limit {
+    return false
+  }
+  if args?.disable_rate_limit {
+    return false
+  }
+  return true
+}
+
+fn __rate_limit_config(args) {
+  if type_of(args?.rate_limit) == "dict" {
+    return args.rate_limit
+  }
+  return args?.rate_limit_config ?? {}
+}
+
+fn __rate_limit_scope(args, cfg) {
+  return to_string(args?.rate_limit_scope ?? args?.scope_key ?? cfg.api_base_url)
+}
+
+fn __acquire_rate_limit(args, cfg) {
+  if !__rate_limit_enabled(args) {
+    return Ok({allowed: true, state: nil})
+  }
+  let scope = __rate_limit_scope(args, cfg)
+  let current = __state()
+  var rate_limits = current?.rate_limits ?? {}
+  let bucket = rate_limit_token_bucket(rate_limits.get(scope), __rate_limit_config(args), args?.now_ms)
+  rate_limits[scope] = bucket.state
+  __set_state(current + {rate_limits: rate_limits})
+  if !bucket.allowed {
+    return __err_meta(
+      "rate_limited",
+      PROVIDER_ID + " API rate limit bucket exhausted",
+      {
+        retry_after_ms: bucket.retry_after_ms,
+        meta: {rate_limit: {scope: scope, retry_after_ms: bucket.retry_after_ms}},
+      },
+    )
+  }
+  return Ok(bucket)
+}
+
+fn __include_meta(args) {
+  return args?.include_meta || args?.return_envelope
+}
+
+fn __is_rate_limited_response(response) {
+  if response?.status == 429 {
+    return true
+  }
+  if response?.status != 403 {
+    return false
+  }
+  let remaining = __int_header(response?.headers ?? {}, "x-ratelimit-remaining") ?? 1
+  return remaining == 0
+}
+
 @complexity(allow)
 fn __api_request(args) {
   let config = __outbound_config(args ?? {})
@@ -473,6 +606,10 @@ fn __api_request(args) {
     return config
   }
   let cfg = unwrap(config)
+  let permit = __acquire_rate_limit(args ?? {}, cfg)
+  if is_err(permit) {
+    return permit
+  }
   let method = uppercase(to_string(args?.method ?? "GET"))
   let path = args?.path ?? args?.url_path ?? ""
   var options = {headers: {Accept: "application/json"}, retry: {max: 0, backoff_ms: 0}}
@@ -490,10 +627,23 @@ fn __api_request(args) {
     return __err("transport", to_string(unwrap_err(response_result)))
   }
   let response = unwrap(response_result)
+  let meta = __response_meta(response)
   if response.status < 200 || response.status >= 300 {
-    return __err("transport", PROVIDER_ID + " API request failed with status " + to_string(response.status))
+    let code = if __is_rate_limited_response(response) {
+      "rate_limited"
+    } else {
+      "transport"
+    }
+    return __err_meta(
+      code,
+      PROVIDER_ID + " API request failed with status " + to_string(response.status),
+      {status: response.status, meta: meta},
+    )
   }
   if trim(response.body ?? "") == "" {
+    if __include_meta(args ?? {}) {
+      return {ok: true, status: response.status, headers: response.headers, body: "", meta: meta}
+    }
     return {status: response.status, headers: response.headers, body: ""}
   }
   let parsed = try {
@@ -502,11 +652,109 @@ fn __api_request(args) {
   if is_err(parsed) {
     return __err("invalid_response", PROVIDER_ID + " API returned invalid JSON")
   }
+  if __include_meta(args ?? {}) {
+    return {ok: true, status: response.status, headers: response.headers, data: unwrap(parsed), meta: meta}
+  }
   return unwrap(parsed)
+}
+
+fn __graphql_request(args) {
+  if args?.query == nil || trim(to_string(args.query)) == "" {
+    return __err("invalid_args", "graphql.request requires query")
+  }
+  let raw = __api_request(
+    args
+      + {
+      method: "POST",
+      path: args?.path ?? "",
+      body: graphql_request_body(args.query, args?.variables ?? {}, args ?? {}),
+      include_meta: true,
+    },
+  )
+  if is_err(raw) {
+    return raw
+  }
+  let response = unwrap(raw)
+  let envelope = graphql_normalize_response(
+    {status: response.status, headers: response.headers, body: response.data},
+    args ?? {},
+  )
+  if !envelope.ok {
+    return __err_meta(
+      "graphql_error",
+      PROVIDER_ID + " GraphQL request failed",
+      {status: envelope.meta.status, errors: envelope.errors, data: envelope.data, meta: envelope.meta},
+    )
+  }
+  return envelope
+}
+
+fn __first_cursor_page(value) {
+  if type_of(value) != "dict" {
+    return nil
+  }
+  if type_of(value?.results) == "list" {
+    return value
+  }
+  for entry in value.entries() {
+    let found = __first_cursor_page(entry.value)
+    if found != nil {
+      return found
+    }
+  }
+  return nil
+}
+
+fn __graphql_page(data, args) {
+  let page_path = args?.page_path ?? args?.connection_path
+  if page_path != nil && trim(to_string(page_path)) != "" {
+    return json_pointer(data ?? {}, to_string(page_path)) ?? {}
+  }
+  return __first_cursor_page(data ?? {}) ?? data ?? {}
+}
+
+fn __pagination_page(args, cursor) {
+  let cursor_key = args?.cursor_variable ?? "cursor"
+  var variables = args?.variables ?? {}
+  if cursor != nil && cursor != "" {
+    variables[cursor_key] = cursor
+  }
+  let envelope = __graphql_request(args + {variables: variables})
+  if is_err(envelope) {
+    throw unwrap_err(envelope)
+  }
+  return __graphql_page(unwrap(envelope).data, args ?? {})
+}
+
+fn __graphql_paginate(args) {
+  let paged = try {
+    paginate_cursor(
+      args?.api_base_url ?? DEFAULT_API_BASE_URL,
+      { _url, cursor -> return __pagination_page(args ?? {}, cursor) },
+      args?.cursor_path ?? "/cursor",
+      {
+        initial_cursor: args?.cursor ?? args?.initial_cursor,
+        items_path: args?.items_path ?? "/results",
+        max_pages: args?.max_pages ?? 100,
+      },
+    )
+  }
+  if is_err(paged) {
+    let err = unwrap_err(paged)
+    if err?.code != nil {
+      return Err(err)
+    }
+    return __err("pagination", to_string(err))
+  }
+  let result = unwrap(paged)
+  return result + {cursor: result.next_cursor, page_count: len(result.pages)}
 }
 
 fn __api_url(api_base_url, path) {
   let base = trim(to_string(api_base_url))
+  if path == nil || trim(to_string(path)) == "" {
+    return base
+  }
   if starts_with(path, "http://") || starts_with(path, "https://") {
     return path
   }

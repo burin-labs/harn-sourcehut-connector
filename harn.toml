@@ -12,11 +12,12 @@ default = "src/lib.harn"
 [[providers]]
 id = "sourcehut"
 connector = { harn = "src/lib.harn" }
+capabilities = ["webhook", "rate_limit", "pagination", "graphql"]
 
 [providers.setup]
 auth_type = "api-key"
 flow = "api-key"
-required_secrets = ["sourcehut/api-token", "sourcehut/webhook-secret"]
+required_secrets = ["sourcehut/api-token", "sourcehut/webhook-public-key"]
 setup_command = ["harn", "connect", "sourcehut"]
 validation_command = ["harn", "connect", "status", "--connector", "sourcehut", "--json"]
 
@@ -26,12 +27,12 @@ kind = "secret"
 secret = "sourcehut/api-token"
 
 [[providers.setup.health_checks]]
-id = "webhook-secret"
+id = "webhook-public-key"
 kind = "secret"
-secret = "sourcehut/webhook-secret"
+secret = "sourcehut/webhook-public-key"
 
 [providers.setup.recovery]
-missing_auth = "Store sourcehut/api-token and sourcehut/webhook-secret before enabling SourceHut bindings."
+missing_auth = "Store sourcehut/api-token and sourcehut/webhook-public-key before enabling SourceHut bindings."
 expired_credentials = "Rotate sourcehut/api-token, then rerun SourceHut connection validation."
 revoked_credentials = "Replace sourcehut/api-token with an active SourceHut OAuth or personal access token."
 missing_scopes = "Grant GraphQL, repository, and webhook scopes required by the configured SourceHut workflows."
