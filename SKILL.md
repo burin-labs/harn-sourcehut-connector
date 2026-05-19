@@ -6,9 +6,9 @@ Use `harn-sourcehut-connector` when wiring Harn triggers or outbound helpers for
 
 - Provider id: `sourcehut`
 - Trigger kinds: `webhook`
-- Supported events: `repo.push, repo.update, todo.created, todo.updated, build.started, build.completed, mail.received`
+- Supported events: `repo.push, repo.update, repo.created, repo.deleted, git.pre_receive, git.post_receive, todo.created, todo.updated, build.started, build.completed, mail.received`
 - Webhook verification: `sourcehut_ed25519`
-- Outbound helpers: `api.request`, `pull_requests.comment`, `pull_requests.update`, `issues.comment`, `commit_status.set`, `repository_file.get`
+- Outbound helpers: `api.request`, `api.paginate`, `graphql.request`, `graphql.paginate`, `pull_requests.comment`, `pull_requests.update`, `issues.comment`, `commit_status.set`, `repository_file.get`
 
 ## Trigger recipe
 
@@ -19,8 +19,8 @@ kind = "webhook"
 provider = "sourcehut"
 match = { path = "/hooks/sourcehut", events = ["repo.push"] }
 handler = "handlers::on_sourcehut_event"
-secrets = { signing_secret = "sourcehut/signing-secret" }
+config = { webhook_public_key_secret = "sourcehut/webhook-public-key" }
 ```
 
-For SourceHut, use a configured `public_key` secret instead of `signing_secret`.
-For SVN polling, add a `poll` trigger and run `harn connector check . --provider svn --run-poll-tick`.
+SourceHut webhook verification uses an Ed25519 public key, not a shared HMAC
+secret. Outbound calls can read the `sourcehut/api-token` secret.

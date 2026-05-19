@@ -16,4 +16,4 @@ to the Harn guide first.
   delivery`.
 - Signed SourceHut webhooks use Ed25519 public-key verification, not an HMAC signing secret.
 - Outbound calls default to the SourceHut GraphQL endpoint and accept OAuth2 tokens or PATs through
-  call args or `SOURCEHUT_TOKEN`.
+  call args, `sourcehut/api-token`, `SOURCEHUT_TOKEN`, or `SOURCEHUT_API_TOKEN`.

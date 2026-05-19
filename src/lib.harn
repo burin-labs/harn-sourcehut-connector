@@ -16,6 +16,10 @@ let EVENT_HEADER = "x-sourcehut-event"
 let SUPPORTED_EVENTS = [
   "repo.push",
   "repo.update",
+  "repo.created",
+  "repo.deleted",
+  "git.pre_receive",
+  "git.post_receive",
   "todo.created",
   "todo.updated",
   "build.started",
@@ -57,7 +61,9 @@ pub fn payload_schema() {
       additionalProperties: true,
       properties: {
         event: {type: "string"},
+        provider: {type: "string"},
         action: {type: ["string", "null"]},
+        delivery_id: {type: ["string", "null"]},
         repository: {type: ["object", "null"], additionalProperties: true},
         actor: {type: ["object", "null"], additionalProperties: true},
         resource: {type: ["object", "null"], additionalProperties: true},
@@ -108,17 +114,17 @@ pub fn shutdown() {
 pub fn normalize_inbound(raw) {
   let body_text = raw?.body_text ?? raw?.body ?? ""
   let headers = raw?.headers ?? {}
+  let verified = __verify_signature(raw, headers, body_text)
+  if is_err(verified) {
+    return __reject_err(unwrap_err(verified))
+  }
   let parsed = try {
-    json_parse(body_text)
+    raw?.body_json ?? json_parse(body_text)
   }
   if is_err(parsed) {
     return __reject(400, "invalid_json", PROVIDER_ID + " payload body is not valid JSON")
   }
   let payload = unwrap(parsed)
-  let verified = __verify_signature(raw, headers, body_text)
-  if is_err(verified) {
-    return __reject_err(unwrap_err(verified))
-  }
   let signature_status = unwrap(verified)
   let base_event = __base_event(payload, headers)
   if base_event == nil || base_event == "" {
@@ -133,20 +139,6 @@ pub fn normalize_inbound(raw) {
   }
   let event = __build_event(base_event, payload, raw, headers, signature_status, body_text)
   return {type: "event", event: event}
-}
-
-/** Run one polling tick for providers that support polling. */
-pub fn poll_tick(ctx = nil) {
-  if PROVIDER_ID != "svn" {
-    return {type: "batch", events: [], cursor: ctx?.cursor, state: ctx?.state ?? {}}
-  }
-  let cursor = ctx?.cursor ?? ctx?.state?.last_revision
-  return {
-    type: "batch",
-    events: [],
-    cursor: cursor,
-    state: {last_revision: cursor, repository_url: ctx?.repository_url},
-  }
 }
 
 @complexity(allow)
@@ -263,9 +255,12 @@ fn __header(headers, name) {
 fn __base_event(payload, headers) {
   let from_header = __header(headers, EVENT_HEADER)
   if from_header != nil && from_header != "" {
-    return to_string(from_header)
+    return __sourcehut_event_alias(from_header)
   }
-  return payload?.event ?? payload?.event_name ?? payload?.object_kind ?? payload?.type ?? payload?.action
+  let raw_event = payload?.event ?? payload?.webhook?.event ?? payload?.event_name ?? payload?.object_kind
+    ?? payload?.type
+    ?? payload?.action
+  return __sourcehut_event_alias(raw_event)
 }
 
 fn __supports_event(event) {
@@ -279,6 +274,29 @@ fn __supports_event(event) {
     }
   }
   return false
+}
+
+fn __sourcehut_event_alias(event) {
+  if event == nil || trim(to_string(event)) == "" {
+    return event
+  }
+  let normalized = __normalize_kind(event)
+  if normalized == "repo_update" || normalized == "repository_update" {
+    return "repo.update"
+  }
+  if normalized == "repo_created" || normalized == "repository_created" {
+    return "repo.created"
+  }
+  if normalized == "repo_deleted" || normalized == "repository_deleted" {
+    return "repo.deleted"
+  }
+  if normalized == "git_post_receive" {
+    return "git.post_receive"
+  }
+  if normalized == "git_pre_receive" {
+    return "git.pre_receive"
+  }
+  return to_string(event)
 }
 
 @complexity(allow)
@@ -375,8 +393,10 @@ fn __build_event(base_event, payload, raw, headers, signature_status, body_text)
     dedupe_key: __dedupe_key(base_event, payload, raw, headers, body_text),
     signature_status: __signature_status(signature_status),
     payload: {
+      provider: PROVIDER_ID,
       event: base_event,
       action: payload?.action,
+      delivery_id: __delivery_id(payload, headers),
       repository: __repository(payload),
       actor: __actor(payload),
       resource: __resource(payload),
@@ -407,11 +427,11 @@ fn __normalize_kind(value) {
 }
 
 fn __repository(payload) {
-  let repo = payload?.repository ?? payload?.repo ?? {}
+  let repo = payload?.repository ?? payload?.repo ?? payload?.webhook?.repository ?? {}
   return {
-    id: repo?.id ?? repo?.uuid,
+    id: repo?.id ?? repo?.uuid ?? repo?.rid,
     name: repo?.name,
-    full_name: repo?.full_name ?? repo?.path_with_namespace ?? repo?.canonical_name,
+    full_name: repo?.full_name ?? repo?.path_with_namespace ?? repo?.canonical_name ?? repo?.repoPath,
     url: repo?.html_url ?? repo?.web_url ?? repo?.links?.html?.href ?? repo?.url,
   }
 }
@@ -430,6 +450,7 @@ fn __resource(payload) {
   return payload?.pull_request ?? payload?.pullrequest ?? payload?.issue ?? payload?.comment
     ?? payload?.release
     ?? payload?.object_attributes
+    ?? payload?.webhook
     ?? {revision: payload?.revision, changed_paths: payload?.changed_paths, commits: payload?.commits}
 }
 
@@ -440,11 +461,22 @@ fn __dedupe_key(base_event, payload, raw, headers, body_text) {
       return PROVIDER_ID + ":" + __normalize_kind(base_event) + ":" + to_string(value)
     }
   }
-  let payload_id = payload?.id ?? payload?.uuid ?? payload?.delivery_id ?? payload?.revision
+  let payload_id = payload?.id ?? payload?.uuid ?? payload?.delivery_id ?? payload?.webhook?.uuid
+    ?? payload?.revision
   if payload_id != nil {
     return PROVIDER_ID + ":" + __normalize_kind(base_event) + ":" + to_string(payload_id)
   }
   return PROVIDER_ID + ":" + __normalize_kind(base_event) + ":" + sha256(body_text)
+}
+
+fn __delivery_id(payload, headers) {
+  for header in DELIVERY_HEADERS {
+    let value = __header(headers, header)
+    if value != nil && value != "" {
+      return value
+    }
+  }
+  return payload?.delivery_id ?? payload?.uuid ?? payload?.webhook?.uuid
 }
 
 fn __normalized_headers(headers) {
@@ -469,12 +501,38 @@ fn __normalized_headers(headers) {
 @complexity(allow)
 fn __outbound_config(args) {
   let env_base = ENV_PREFIX + "_API_BASE_URL"
-  let env_token = ENV_PREFIX + "_TOKEN"
   let api_base_url = args?.api_base_url ?? env_or(env_base, DEFAULT_API_BASE_URL)
-  let access_token = args?.access_token ?? args?.token ?? args?.personal_access_token ?? args?.app_password
-    ?? args?.secrets?.access_token
-    ?? env(env_token)
+  let access_token = __outbound_access_token(args ?? {})
   return Ok({api_base_url: to_string(api_base_url), access_token: access_token})
+}
+
+fn __outbound_access_token(args) {
+  if args?.access_token != nil && trim(to_string(args.access_token)) != "" {
+    return args.access_token
+  }
+  if args?.token != nil && trim(to_string(args.token)) != "" {
+    return args.token
+  }
+  if args?.personal_access_token != nil && trim(to_string(args.personal_access_token)) != "" {
+    return args.personal_access_token
+  }
+  if args?.app_password != nil && trim(to_string(args.app_password)) != "" {
+    return args.app_password
+  }
+  if args?.api_token != nil && trim(to_string(args.api_token)) != "" {
+    return args.api_token
+  }
+  if args?.secrets?.access_token != nil && trim(to_string(args.secrets.access_token)) != "" {
+    return args.secrets.access_token
+  }
+  if args?.secrets?.api_token != nil && trim(to_string(args.secrets.api_token)) != "" {
+    return args.secrets.api_token
+  }
+  let stored = __secret_get_optional(PROVIDER_ID + "/api-token")
+  if stored != nil && trim(to_string(stored)) != "" {
+    return stored
+  }
+  return env(ENV_PREFIX + "_TOKEN") ?? env(ENV_PREFIX + "_API_TOKEN")
 }
 
 fn __config_keys() {
@@ -484,6 +542,7 @@ fn __config_keys() {
     "token",
     "personal_access_token",
     "app_password",
+    "api_token",
     "secrets",
     "rate_limit",
     "rate_limit_config",
@@ -612,14 +671,16 @@ fn __api_request(args) {
   }
   let method = uppercase(to_string(args?.method ?? "GET"))
   let path = args?.path ?? args?.url_path ?? ""
-  var options = {headers: {Accept: "application/json"}, retry: {max: 0, backoff_ms: 0}}
+  var request_headers = {Accept: "application/json"}
   if cfg.access_token != nil && trim(to_string(cfg.access_token)) != "" {
-    options.headers["Authorization"] = "Bearer " + to_string(cfg.access_token)
+    request_headers["Authorization"] = "Bearer " + to_string(cfg.access_token)
   }
+  var options = {retry: {max: 0, backoff_ms: 0}}
   if args?.body != nil {
     options["body"] = json_stringify(args.body)
-    options.headers["Content-Type"] = "application/json"
+    request_headers["Content-Type"] = "application/json"
   }
+  options["headers"] = request_headers
   let response_result = try {
     http_request(method, __api_url(cfg.api_base_url, path), options)
   }
