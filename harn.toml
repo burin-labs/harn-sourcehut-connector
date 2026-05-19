@@ -16,9 +16,9 @@ capabilities = ["webhook", "rate_limit", "pagination", "graphql"]
 
 [providers.setup]
 auth_type = "api-key"
-flow = "api-key"
+flow = "cli"
 required_secrets = ["sourcehut/api-token", "sourcehut/webhook-public-key"]
-setup_command = ["harn", "connect", "sourcehut"]
+setup_command = ["harn", "connect", "api-key", "--connector", "sourcehut", "--secret-id", "sourcehut/api-token"]
 validation_command = ["harn", "connect", "status", "--connector", "sourcehut", "--json"]
 
 [[providers.setup.health_checks]]
@@ -55,6 +55,18 @@ expect_kind = "repo.push"
 expect_signature_state = "unsigned"
 expect_event_count = 1
 expect_payload_contains = { provider = "sourcehut", raw = { event = "repo.push" } }
+
+[[connector_contract.fixtures]]
+provider = "sourcehut"
+name = "git post receive enum"
+kind = "webhook"
+body_json = { webhook = { uuid = "delivery-2", event = "GIT_POST_RECEIVE" }, repository = { rid = "repo-1", name = "widgets", repoPath = "~ada/widgets" } }
+expect_type = "event"
+expect_kind = "git.post_receive"
+expect_dedupe_key = "sourcehut:git.post_receive:delivery-2"
+expect_signature_state = "unsigned"
+expect_event_count = 1
+expect_payload_contains = { provider = "sourcehut", raw = { delivery_id = "delivery-2", repository = { id = "repo-1", full_name = "~ada/widgets" } } }
 
 [[connector_contract.fixtures]]
 provider = "sourcehut"

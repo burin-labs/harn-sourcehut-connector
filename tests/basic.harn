@@ -57,6 +57,24 @@ pipeline test_sourcehut_connector(task) {
     "verified",
     "alternate signed status",
   )
+  let enum_body = "{\"webhook\":{\"uuid\":\"delivery-2\",\"event\":\"GIT_POST_RECEIVE\"},\"repository\":{\"rid\":\"repo-1\",\"name\":\"widgets\",\"repoPath\":\"~ada/widgets\"}}"
+  let sourcehut_enum_event = normalize_inbound(
+    {
+      public_key: keypair.public,
+      body_text: enum_body,
+      headers: {"x-sourcehut-signature": ed25519_sign(keypair.private, enum_body)},
+    },
+  )
+  assert_eq(sourcehut_enum_event.type, "event", "SourceHut enum event verifies")
+  assert_eq(sourcehut_enum_event.event.kind, "git.post_receive", "SourceHut enum event maps")
+  assert_eq(sourcehut_enum_event.event.payload.provider, "sourcehut", "payload carries provider")
+  assert_eq(
+    sourcehut_enum_event.event.payload.delivery_id,
+    "delivery-2",
+    "payload carries delivery id",
+  )
+  shutdown()
+  init()
   let invalid_json = normalize_inbound({body_text: "{bad json", headers: headers})
   assert_eq(invalid_json.type, "reject", "invalid json rejects")
   http_mock_clear()
@@ -67,9 +85,11 @@ pipeline test_sourcehut_connector(task) {
   )
   let response = call(
     "api.request",
-    {api_base_url: "https://git.sr.ht/query", path: "/projects", access_token: "token"},
+    {api_base_url: "https://git.sr.ht/query", path: "/projects", api_token: "token"},
   )
   assert_eq(response.ok, true, "api request")
+  let api_calls = http_mock_calls({redact_sensitive: false})
+  assert(contains(json_stringify(api_calls[0]), "Bearer token"), "api_token authorizes request")
   http_mock_clear()
   shutdown()
   init()
@@ -182,6 +202,7 @@ pipeline test_sourcehut_connector(task) {
   assert_eq(paged.items[1].name, "beta", "second paginated item")
   assert_eq(paged.complete, true, "cursor pagination complete")
   let calls = http_mock_calls({include_sensitive: true})
+  assert(contains(json_stringify(calls[0]), "content-type"), "graphql request sets content type")
   assert(contains(calls[1].body, "\"cursor\":\"page-2\""), "second page uses cursor")
   let unsupported = call("unknown", {})
   assert(is_err(unsupported), "unknown method errors")
