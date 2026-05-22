@@ -1,18 +1,21 @@
 # harn-sourcehut-connector
 
-Pure-Harn SourceHut connector: Ed25519-signed webhooks plus GraphQL/REST passthrough helpers.
+SourceHut connector written in Harn: Ed25519 webhook verification plus GraphQL
+and raw HTTP helpers.
 
 This package implements Harn Connector contract v1 for `sourcehut`. It verifies
 SourceHut Ed25519 webhook signatures, normalizes inbound webhook payloads to the
-tagged `NormalizeResult` envelope, and exposes GraphQL/API passthrough helpers.
+tagged `NormalizeResult` envelope, and exposes GraphQL and raw HTTP helpers.
 
 ## Install
+
+Use the latest tagged release when you want a stable package ref:
 
 ```sh
 harn add github.com/burin-labs/harn-sourcehut-connector@v0.1.0
 ```
 
-Until a version is tagged, depend on a path checkout:
+Use a path checkout for unreleased `main` or local multi-repo development:
 
 ```toml
 [dependencies]
@@ -46,9 +49,12 @@ the helper follows SourceHut `{ results, cursor }` pages and returns
 ## Development
 
 ```sh
-harn check src/lib.harn
-harn fmt --check src/lib.harn tests/*.harn
+harn install
+harn check src
+harn lint src
+harn fmt --check src tests
 for test in tests/*.harn; do harn run "$test" || exit 1; done
+harn connector check .
 ```
 
 ## License

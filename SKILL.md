@@ -2,13 +2,17 @@
 
 Use `harn-sourcehut-connector` when wiring Harn triggers or outbound helpers for SourceHut.
 
-## What you get
+## Connector surface
 
 - Provider id: `sourcehut`
 - Trigger kinds: `webhook`
-- Supported events: `repo.push, repo.update, repo.created, repo.deleted, git.pre_receive, git.post_receive, todo.created, todo.updated, build.started, build.completed, mail.received`
+- Supported events: `repo.push`, `repo.update`, `repo.created`, `repo.deleted`, `git.pre_receive`,
+  `git.post_receive`, `todo.created`, `todo.updated`, `build.started`, `build.completed`,
+  `mail.received`
 - Webhook verification: `sourcehut_ed25519`
-- Outbound helpers: `api.request`, `api.paginate`, `graphql.request`, `graphql.paginate`, `pull_requests.comment`, `pull_requests.update`, `issues.comment`, `commit_status.set`, `repository_file.get`
+- Outbound helpers: `api.request`, `api.paginate`, `graphql.request`, `graphql.paginate`,
+  `pull_requests.comment`, `pull_requests.update`, `issues.comment`, `commit_status.set`,
+  `repository_file.get`
 
 ## Trigger recipe
 
