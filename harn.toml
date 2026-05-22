@@ -1,7 +1,7 @@
 [package]
 name = "harn-sourcehut-connector"
 version = "0.1.0"
-description = "Pure-Harn SourceHut connector: Ed25519-signed webhooks plus GraphQL/REST passthrough helpers."
+description = "SourceHut connector written in Harn: Ed25519 webhook verification plus GraphQL and raw HTTP helpers."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/burin-labs/harn-sourcehut-connector"
 connector_contract = "v1"

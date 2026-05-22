@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Use `CLAUDE.md` in this repository for provider-specific notes. Shared connector authoring rules
-live in the canonical Harn guide:
+This repo keeps shared Harn connector rules out of local agent files.
 
-- https://github.com/burin-labs/harn/blob/main/docs/src/connectors/authoring.md
+- Shared authoring rules: <https://github.com/burin-labs/harn/blob/main/docs/src/connectors/authoring.md>
+- Provider-specific notes: [CLAUDE.md](CLAUDE.md)
 
-Keep this file as a pointer. Add shared connector guidance to the Harn guide first.
+Add shared connector guidance to the Harn guide first.
