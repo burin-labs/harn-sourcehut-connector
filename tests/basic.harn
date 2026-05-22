@@ -41,6 +41,15 @@ pipeline test_sourcehut_connector(task) {
   )
   assert_eq(bad_signature.type, "reject", "bad signature rejects")
   assert_eq(bad_signature.reject.status, 401, "bad signature status")
+  let wrong_signature_scheme = normalize_inbound(
+    {
+      public_key: keypair.public,
+      body_text: body,
+      headers: headers + {"x-sourcehut-signature": "sha256=" + signature},
+    },
+  )
+  assert_eq(wrong_signature_scheme.type, "reject", "wrong signature scheme rejects")
+  assert_eq(wrong_signature_scheme.reject.status, 401, "wrong signature scheme status")
   shutdown()
   init({public_key: keypair.public})
   let missing_signature = normalize_inbound({body_text: body, headers: headers})
@@ -56,6 +65,11 @@ pipeline test_sourcehut_connector(task) {
     alternate_signature_header.event.signature_status.state,
     "verified",
     "alternate signed status",
+  )
+  assert_eq(
+    alternate_signature_header.event.headers["x-srht-signature"],
+    signature,
+    "alternate signature header is preserved",
   )
   let enum_body = "{\"webhook\":{\"uuid\":\"delivery-2\",\"event\":\"GIT_POST_RECEIVE\"},\"repository\":{\"rid\":\"repo-1\",\"name\":\"widgets\",\"repoPath\":\"~ada/widgets\"}}"
   let sourcehut_enum_event = normalize_inbound(
@@ -73,10 +87,44 @@ pipeline test_sourcehut_connector(task) {
     "delivery-2",
     "payload carries delivery id",
   )
+  let ticket_body = "{\"webhook\":{\"uuid\":\"ticket-1\",\"event\":\"TICKET_CREATED\",\"date\":\"2026-05-22T09:30:00Z\",\"ticket\":{\"id\":42,\"ref\":\"todo.sr.ht/~ada/widgets/42\",\"subject\":\"Fix widgets\"}},\"submitter\":{\"canonical_name\":\"~ada\"}}"
+  let sourcehut_ticket_event = normalize_inbound(
+    {
+      public_key: keypair.public,
+      body_text: ticket_body,
+      headers: {"x-sourcehut-signature": ed25519_sign(keypair.private, ticket_body)},
+    },
+  )
+  assert_eq(sourcehut_ticket_event.type, "event", "SourceHut ticket event verifies")
+  assert_eq(sourcehut_ticket_event.event.kind, "ticket.created", "SourceHut ticket enum maps")
+  assert_eq(
+    sourcehut_ticket_event.event.occurred_at,
+    "2026-05-22T09:30:00Z",
+    "SourceHut webhook date maps to occurred_at",
+  )
+  assert_eq(sourcehut_ticket_event.event.payload.resource.id, 42, "ticket resource is preserved")
+  let build_body = "{\"webhook\":{\"uuid\":\"job-1\",\"event\":\"JOB_UPDATED\",\"date\":\"2026-05-22T09:31:00Z\"},\"job\":{\"id\":7,\"status\":\"SUCCESS\"}}"
+  let sourcehut_build_event = normalize_inbound(
+    {
+      public_key: keypair.public,
+      body_text: build_body,
+      headers: {"x-sourcehut-signature": ed25519_sign(keypair.private, build_body)},
+    },
+  )
+  assert_eq(sourcehut_build_event.type, "event", "SourceHut build event verifies")
+  assert_eq(sourcehut_build_event.event.kind, "build.updated", "SourceHut build enum maps")
+  assert_eq(
+    sourcehut_build_event.event.payload.resource.status,
+    "SUCCESS",
+    "job resource is preserved",
+  )
   shutdown()
   init()
   let invalid_json = normalize_inbound({body_text: "{bad json", headers: headers})
   assert_eq(invalid_json.type, "reject", "invalid json rejects")
+  let unsupported_prefix = normalize_inbound({body_text: "{\"event\":\"repo.push_extra\"}", headers: {}})
+  assert_eq(unsupported_prefix.type, "reject", "unsupported prefix event rejects")
+  assert_eq(unsupported_prefix.reject.status, 400, "unsupported prefix status")
   http_mock_clear()
   http_mock(
     "GET",
@@ -204,6 +252,13 @@ pipeline test_sourcehut_connector(task) {
   let calls = http_mock_calls({include_sensitive: true})
   assert(contains(json_stringify(calls[0]), "content-type"), "graphql request sets content type")
   assert(contains(calls[1].body, "\"cursor\":\"page-2\""), "second page uses cursor")
+  let unsupported_source_control_helper = call("repository_file.get", {})
+  assert(is_err(unsupported_source_control_helper), "provider-specific unsupported helper errors")
+  assert_eq(
+    unwrap_err(unsupported_source_control_helper).code,
+    "method_not_found",
+    "unsupported helper error code",
+  )
   let unsupported = call("unknown", {})
   assert(is_err(unsupported), "unknown method errors")
   http_mock_clear()
