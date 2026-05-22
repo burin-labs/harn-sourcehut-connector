@@ -70,6 +70,39 @@ expect_payload_contains = { provider = "sourcehut", raw = { delivery_id = "deliv
 
 [[connector_contract.fixtures]]
 provider = "sourcehut"
+name = "ticket created enum"
+kind = "webhook"
+body_json = { webhook = { uuid = "ticket-1", event = "TICKET_CREATED", date = "2026-05-22T09:30:00Z", ticket = { id = 42, subject = "Fix widgets" } }, submitter = { canonical_name = "~ada" } }
+expect_type = "event"
+expect_kind = "ticket.created"
+expect_dedupe_key = "sourcehut:ticket.created:ticket-1"
+expect_signature_state = "unsigned"
+expect_event_count = 1
+expect_payload_contains = { provider = "sourcehut", raw = { event = "ticket.created", resource = { id = 42, subject = "Fix widgets" }, actor = { username = "~ada" } } }
+
+[[connector_contract.fixtures]]
+provider = "sourcehut"
+name = "build job updated enum"
+kind = "webhook"
+body_json = { webhook = { uuid = "job-1", event = "JOB_UPDATED", date = "2026-05-22T09:31:00Z" }, job = { id = 7, status = "SUCCESS" } }
+expect_type = "event"
+expect_kind = "build.updated"
+expect_dedupe_key = "sourcehut:build.updated:job-1"
+expect_signature_state = "unsigned"
+expect_event_count = 1
+expect_payload_contains = { provider = "sourcehut", raw = { event = "build.updated", resource = { id = 7, status = "SUCCESS" } } }
+
+[[connector_contract.fixtures]]
+provider = "sourcehut"
+name = "unsupported prefix event"
+kind = "webhook"
+body_json = { event = "repo.push_extra" }
+expect_type = "reject"
+expect_response_status = 400
+expect_event_count = 0
+
+[[connector_contract.fixtures]]
+provider = "sourcehut"
 name = "malformed payload"
 kind = "webhook"
 headers = { "x-sourcehut-event" = "repo.push" }

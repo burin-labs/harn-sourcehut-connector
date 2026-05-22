@@ -1,4 +1,9 @@
-import { paginate_cursor, rate_limit_token_bucket } from "std/connectors/shared"
+import { env_str } from "std/config"
+import {
+  connector_http_json,
+  paginate_cursor,
+  rate_limit_token_bucket,
+} from "std/connectors/shared"
 import { graphql_normalize_response, graphql_request_body } from "std/graphql"
 
 let PROVIDER_ID = "sourcehut"
@@ -20,26 +25,61 @@ let SUPPORTED_EVENTS = [
   "repo.deleted",
   "git.pre_receive",
   "git.post_receive",
-  "todo.created",
-  "todo.updated",
-  "build.started",
-  "build.completed",
-  "mail.received",
+  "tracker.created",
+  "tracker.updated",
+  "tracker.deleted",
+  "ticket.created",
+  "ticket.updated",
+  "ticket.deleted",
+  "label.created",
+  "label.updated",
+  "label.deleted",
+  "ticket.event_created",
+  "build.created",
+  "build.updated",
+  "mailing_list.created",
+  "mailing_list.updated",
+  "mailing_list.deleted",
+  "email.received",
+  "patchset.received",
 ]
+
+let EVENT_ALIASES = {
+  repo_update: "repo.update",
+  repository_update: "repo.update",
+  repo_created: "repo.created",
+  repository_created: "repo.created",
+  repo_deleted: "repo.deleted",
+  repository_deleted: "repo.deleted",
+  git_post_receive: "git.post_receive",
+  git_pre_receive: "git.pre_receive",
+  tracker_created: "tracker.created",
+  tracker_update: "tracker.updated",
+  tracker_updated: "tracker.updated",
+  tracker_deleted: "tracker.deleted",
+  ticket_created: "ticket.created",
+  ticket_update: "ticket.updated",
+  ticket_updated: "ticket.updated",
+  ticket_deleted: "ticket.deleted",
+  label_created: "label.created",
+  label_update: "label.updated",
+  label_updated: "label.updated",
+  label_deleted: "label.deleted",
+  event_created: "ticket.event_created",
+  job_created: "build.created",
+  job_update: "build.updated",
+  job_updated: "build.updated",
+  list_created: "mailing_list.created",
+  list_update: "mailing_list.updated",
+  list_updated: "mailing_list.updated",
+  list_deleted: "mailing_list.deleted",
+  email_received: "email.received",
+  patchset_received: "patchset.received",
+}
 
 let DELIVERY_HEADERS = ["x-sourcehut-delivery", "x-srht-delivery"]
 
-let OUTBOUND_METHODS = [
-  "api.request",
-  "api.paginate",
-  "graphql.request",
-  "graphql.paginate",
-  "pull_requests.comment",
-  "pull_requests.update",
-  "issues.comment",
-  "commit_status.set",
-  "repository_file.get",
-]
+let OUTBOUND_METHODS = ["api.request", "api.paginate", "graphql.request", "graphql.paginate"]
 
 /** Return this connector's provider id. */
 pub fn provider_id() {
@@ -145,10 +185,7 @@ pub fn normalize_inbound(raw) {
 /** Dispatch a supported outbound helper method. */
 pub fn call(method, args = {}) {
   if !contains(OUTBOUND_METHODS, method) {
-    return __err(
-      "method_not_found",
-      PROVIDER_ID + " connector does not implement outbound method `" + method + "`",
-    )
+    return __method_not_found(method)
   }
   if method == "api.request" {
     return __api_request(args ?? {})
@@ -159,47 +196,7 @@ pub fn call(method, args = {}) {
   if method == "graphql.request" {
     return __graphql_request(args ?? {})
   }
-  if method == "pull_requests.comment" {
-    return __api_request(
-      args
-        + {
-        method: "POST",
-        path: args?.path ?? __pull_request_comment_path(args),
-        body: {body: args?.body ?? args?.comment},
-      },
-    )
-  }
-  if method == "pull_requests.update" {
-    return __api_request(
-      args
-        + {
-        method: "PATCH",
-        path: args?.path ?? __pull_request_path(args),
-        body: __body_without(args, __config_keys() + ["owner", "repo", "pull_request", "pull_request_id", "path"]),
-      },
-    )
-  }
-  if method == "issues.comment" {
-    return __api_request(
-      args
-        + {
-        method: "POST",
-        path: args?.path ?? __issue_comment_path(args),
-        body: {body: args?.body ?? args?.comment},
-      },
-    )
-  }
-  if method == "commit_status.set" {
-    return __api_request(
-      args
-        + {
-        method: "POST",
-        path: args?.path ?? __commit_status_path(args),
-        body: __body_without(args, __config_keys() + ["owner", "repo", "sha", "path"]),
-      },
-    )
-  }
-  return __api_request(args + {method: "GET", path: args?.path ?? __repository_file_path(args)})
+  return __method_not_found(method)
 }
 
 fn __state() {
@@ -213,6 +210,13 @@ fn __set_state(state) {
 
 fn __err(code, message) {
   return Err({code: code, message: message})
+}
+
+fn __method_not_found(method) {
+  return __err(
+    "method_not_found",
+    PROVIDER_ID + " connector does not implement outbound method `" + method + "`",
+  )
 }
 
 fn __err_meta(code, message, meta = nil) {
@@ -269,7 +273,8 @@ fn __supports_event(event) {
   }
   let normalized = __normalize_kind(event)
   for supported in SUPPORTED_EVENTS {
-    if starts_with(normalized, __normalize_kind(supported)) {
+    let supported_kind = __normalize_kind(supported)
+    if normalized == supported_kind || starts_with(normalized, supported_kind + ".") {
       return true
     }
   }
@@ -281,20 +286,9 @@ fn __sourcehut_event_alias(event) {
     return event
   }
   let normalized = __normalize_kind(event)
-  if normalized == "repo_update" || normalized == "repository_update" {
-    return "repo.update"
-  }
-  if normalized == "repo_created" || normalized == "repository_created" {
-    return "repo.created"
-  }
-  if normalized == "repo_deleted" || normalized == "repository_deleted" {
-    return "repo.deleted"
-  }
-  if normalized == "git_post_receive" {
-    return "git.post_receive"
-  }
-  if normalized == "git_pre_receive" {
-    return "git.pre_receive"
+  let alias = EVENT_ALIASES.get(normalized)
+  if alias != nil {
+    return alias
   }
   return to_string(event)
 }
@@ -378,9 +372,6 @@ fn __strip_signature_prefix(signature) {
   if starts_with(value, "ed25519=") {
     return value[8:len(value)]
   }
-  if starts_with(value, "sha256=") {
-    return value[7:len(value)]
-  }
   return value
 }
 
@@ -389,7 +380,7 @@ fn __build_event(base_event, payload, raw, headers, signature_status, body_text)
   let kind = __event_kind(base_event, payload)
   return {
     kind: kind,
-    occurred_at: raw?.occurred_at ?? payload?.updated_at ?? payload?.created_at ?? payload?.timestamp,
+    occurred_at: __occurred_at(payload, raw),
     dedupe_key: __dedupe_key(base_event, payload, raw, headers, body_text),
     signature_status: __signature_status(signature_status),
     payload: {
@@ -404,6 +395,12 @@ fn __build_event(base_event, payload, raw, headers, signature_status, body_text)
     },
     headers: __normalized_headers(headers),
   }
+}
+
+fn __occurred_at(payload, raw) {
+  return raw?.occurred_at ?? payload?.webhook?.date ?? payload?.date ?? payload?.updated_at
+    ?? payload?.created_at
+    ?? payload?.timestamp
 }
 
 fn __signature_status(status) {
@@ -437,7 +434,11 @@ fn __repository(payload) {
 }
 
 fn __actor(payload) {
-  let actor = payload?.sender ?? payload?.user ?? payload?.actor ?? payload?.pusher ?? {}
+  let actor = payload?.sender ?? payload?.user ?? payload?.actor ?? payload?.pusher ?? payload?.submitter
+    ?? payload?.owner
+    ?? payload?.webhook?.sender
+    ?? payload?.webhook?.user
+    ?? {}
   return {
     id: actor?.id ?? actor?.uuid,
     username: actor?.login ?? actor?.username ?? actor?.nickname ?? actor?.canonical_name,
@@ -447,7 +448,21 @@ fn __actor(payload) {
 }
 
 fn __resource(payload) {
-  return payload?.pull_request ?? payload?.pullrequest ?? payload?.issue ?? payload?.comment
+  return payload?.pull_request ?? payload?.pullrequest ?? payload?.ticket ?? payload?.tracker
+    ?? payload?.label
+    ?? payload?.job
+    ?? payload?.email
+    ?? payload?.patchset
+    ?? payload?.list
+    ?? payload?.webhook?.ticket
+    ?? payload?.webhook?.tracker
+    ?? payload?.webhook?.label
+    ?? payload?.webhook?.job
+    ?? payload?.webhook?.email
+    ?? payload?.webhook?.patchset
+    ?? payload?.webhook?.list
+    ?? payload?.issue
+    ?? payload?.comment
     ?? payload?.release
     ?? payload?.object_attributes
     ?? payload?.webhook
@@ -489,6 +504,10 @@ fn __normalized_headers(headers) {
   if signature != nil {
     normalized[SIGNATURE_HEADER] = signature
   }
+  let srht_signature = __header(headers, "x-srht-signature")
+  if srht_signature != nil {
+    normalized["x-srht-signature"] = srht_signature
+  }
   for header in DELIVERY_HEADERS {
     let value = __header(headers, header)
     if value != nil {
@@ -501,7 +520,7 @@ fn __normalized_headers(headers) {
 @complexity(allow)
 fn __outbound_config(args) {
   let env_base = ENV_PREFIX + "_API_BASE_URL"
-  let api_base_url = args?.api_base_url ?? env_or(env_base, DEFAULT_API_BASE_URL)
+  let api_base_url = args?.api_base_url ?? env_str(env_base) ?? DEFAULT_API_BASE_URL
   let access_token = __outbound_access_token(args ?? {})
   return Ok({api_base_url: to_string(api_base_url), access_token: access_token})
 }
@@ -532,33 +551,7 @@ fn __outbound_access_token(args) {
   if stored != nil && trim(to_string(stored)) != "" {
     return stored
   }
-  return env(ENV_PREFIX + "_TOKEN") ?? env(ENV_PREFIX + "_API_TOKEN")
-}
-
-fn __config_keys() {
-  return [
-    "api_base_url",
-    "access_token",
-    "token",
-    "personal_access_token",
-    "app_password",
-    "api_token",
-    "secrets",
-    "rate_limit",
-    "rate_limit_config",
-    "rate_limit_scope",
-    "now_ms",
-    "include_meta",
-    "return_envelope",
-  ]
-}
-
-fn __body_without(args, keys) {
-  let body = args ?? {} + {}
-  for key in keys {
-    body.remove(key)
-  }
-  return body
+  return env_str(ENV_PREFIX + "_TOKEN") ?? env_str(ENV_PREFIX + "_API_TOKEN")
 }
 
 fn __int_header(headers, name) {
@@ -681,42 +674,36 @@ fn __api_request(args) {
     request_headers["Content-Type"] = "application/json"
   }
   options["headers"] = request_headers
-  let response_result = try {
-    http_request(method, __api_url(cfg.api_base_url, path), options)
-  }
-  if is_err(response_result) {
-    return __err("transport", to_string(unwrap_err(response_result)))
-  }
-  let response = unwrap(response_result)
+  let response = connector_http_json(
+    method,
+    __api_url(cfg.api_base_url, path),
+    options + {provider: PROVIDER_ID, operation: method + " " + to_string(path)},
+  )
   let meta = __response_meta(response)
-  if response.status < 200 || response.status >= 300 {
-    let code = if __is_rate_limited_response(response) {
+  if !(response.ok ?? false) {
+    let code = if response?.category == "rate_limit" || __is_rate_limited_response(response) {
       "rate_limited"
+    } else if response?.category == "invalid_json" {
+      "invalid_response"
     } else {
       "transport"
     }
     return __err_meta(
       code,
-      PROVIDER_ID + " API request failed with status " + to_string(response.status),
-      {status: response.status, meta: meta},
+      PROVIDER_ID + " API request failed with status " + to_string(response?.status),
+      {status: response?.status, meta: meta},
     )
   }
-  if trim(response.body ?? "") == "" {
+  if response?.json == nil && trim(response?.body ?? "") == "" {
     if __include_meta(args ?? {}) {
       return {ok: true, status: response.status, headers: response.headers, body: "", meta: meta}
     }
     return {status: response.status, headers: response.headers, body: ""}
   }
-  let parsed = try {
-    json_parse(response.body)
-  }
-  if is_err(parsed) {
-    return __err("invalid_response", PROVIDER_ID + " API returned invalid JSON")
-  }
   if __include_meta(args ?? {}) {
-    return {ok: true, status: response.status, headers: response.headers, data: unwrap(parsed), meta: meta}
+    return {ok: true, status: response.status, headers: response.headers, data: response.json, meta: meta}
   }
-  return unwrap(parsed)
+  return response.json
 }
 
 fn __graphql_request(args) {
@@ -828,33 +815,4 @@ fn __api_url(api_base_url, path) {
     return prefix + path
   }
   return prefix + "/" + path
-}
-
-fn __repo_ref(args) {
-  let owner = args?.owner ?? args?.workspace ?? args?.project ?? ""
-  let repo = args?.repo ?? args?.repository ?? ""
-  if owner != "" && repo != "" {
-    return url_encode(to_string(owner)) + "/" + url_encode(to_string(repo))
-  }
-  return url_encode(to_string(args?.repo_full_name ?? args?.repository_full_name ?? ""))
-}
-
-fn __pull_request_path(args) {
-  return "/repos/" + __repo_ref(args) + "/pulls/" + to_string(args?.pull_request ?? args?.pull_request_id)
-}
-
-fn __pull_request_comment_path(args) {
-  return __pull_request_path(args) + "/comments"
-}
-
-fn __issue_comment_path(args) {
-  return "/repos/" + __repo_ref(args) + "/issues/" + to_string(args?.issue ?? args?.issue_id) + "/comments"
-}
-
-fn __commit_status_path(args) {
-  return "/repos/" + __repo_ref(args) + "/statuses/" + to_string(args?.sha ?? args?.commit)
-}
-
-fn __repository_file_path(args) {
-  return "/repos/" + __repo_ref(args) + "/contents/" + url_encode(to_string(args?.path ?? ""))
 }

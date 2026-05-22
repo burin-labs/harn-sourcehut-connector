@@ -30,7 +30,9 @@ Provide `public_key`, `webhook_public_key`, or the
 
 SourceHut GraphQL webhook enum names such as `GIT_POST_RECEIVE` and
 `REPO_UPDATE` are accepted and mapped to Harn event kinds such as
-`git.post_receive` and `repo.update`.
+`git.post_receive` and `repo.update`. The connector also maps the current
+SourceHut todo, builds, and lists webhook enums, including `TICKET_CREATED`,
+`JOB_UPDATED`, `EMAIL_RECEIVED`, and `PATCHSET_RECEIVED`.
 
 ## Authentication
 
@@ -45,6 +47,10 @@ Pass `rate_limit` or `rate_limit_config` to tune the bucket, and set
 SourceHut GraphQL lists can be drained with `call("graphql.paginate", args)`;
 the helper follows SourceHut `{ results, cursor }` pages and returns
 `{ items, pages, next_cursor, complete }`.
+
+Provider-specific source-control shortcuts are intentionally not exposed here;
+use `api.request`, `graphql.request`, or `graphql.paginate` with the exact
+SourceHut GraphQL operation the workflow needs.
 
 ## Development
 
