@@ -15,15 +15,16 @@ pipeline test_sourcehut_connector(task) {
   assert_eq(provider_id(), "sourcehut", "provider id")
   assert_eq(kinds()[0], "webhook", "first kind")
   assert_eq(payload_schema().harn_schema_name, "SourceHutEventPayload", "schema")
-  init()
-  let activated = activate([{id: "primary", path: "/hooks/sourcehut"}])
+  let keypair = ed25519_keypair()
+  // Seed the public key via init(ctx) — never via inbound `raw.public_key`.
+  init({public_key: keypair.public})
+  let activated = activate([{id: "primary", path: "/hooks/sourcehut", secrets: {public_key: keypair.public}}])
   assert_eq(activated.bindings, 1, "activation count")
   let body = "{\"event\":\"repo.push\",\"repository\":{\"name\":\"~ada/widgets\",\"url\":\"https://git.sr.ht/~ada/widgets\"},\"pusher\":{\"canonical_name\":\"~ada\"},\"commits\":[{\"id\":\"abc123\"}]}"
   let headers = {"x-sourcehut-event": "repo.push", "x-sourcehut-delivery": "delivery-1"}
-  let keypair = ed25519_keypair()
   let signature = ed25519_sign(keypair.private, body)
   let raw = {
-    public_key: keypair.public,
+    binding_id: "primary",
     body_text: body,
     headers: headers + {"x-sourcehut-signature": "ed25519=" + signature},
   }
@@ -33,33 +34,35 @@ pipeline test_sourcehut_connector(task) {
   assert_eq(normalized.event.signature_status.state, "verified", "signed status")
   assert(normalized.event.dedupe_key != nil && normalized.event.dedupe_key != "", "dedupe key")
   let bad_signature = normalize_inbound(
-    {
-      public_key: keypair.public,
-      body_text: body,
-      headers: headers + {"x-sourcehut-signature": "ed25519=00"},
-    },
+    {binding_id: "primary", body_text: body, headers: headers + {"x-sourcehut-signature": "ed25519=00"}},
   )
   assert_eq(bad_signature.type, "reject", "bad signature rejects")
   assert_eq(bad_signature.reject.status, 401, "bad signature status")
   let wrong_signature_scheme = normalize_inbound(
     {
-      public_key: keypair.public,
+      binding_id: "primary",
       body_text: body,
       headers: headers + {"x-sourcehut-signature": "sha256=" + signature},
     },
   )
   assert_eq(wrong_signature_scheme.type, "reject", "wrong signature scheme rejects")
   assert_eq(wrong_signature_scheme.reject.status, 401, "wrong signature scheme status")
-  shutdown()
-  init({public_key: keypair.public})
-  let missing_signature = normalize_inbound({body_text: body, headers: headers})
+  let missing_signature = normalize_inbound({binding_id: "primary", body_text: body, headers: headers})
   assert_eq(
     missing_signature.type,
     "reject",
     "missing signature rejects when a public key is configured",
   )
   assert_eq(missing_signature.reject.status, 401, "missing signature status")
-  let alternate_signature_header = normalize_inbound({body_text: body, headers: headers + {"x-srht-signature": signature}})
+  // F8: missing binding_id is fail-closed.
+  let no_binding = normalize_inbound(
+    {body_text: body, headers: headers + {"x-sourcehut-signature": "ed25519=" + signature}},
+  )
+  assert_eq(no_binding.type, "reject", "missing binding_id rejects")
+  assert_eq(no_binding.reject.status, 400, "missing binding_id status")
+  let alternate_signature_header = normalize_inbound(
+    {binding_id: "primary", body_text: body, headers: headers + {"x-srht-signature": signature}},
+  )
   assert_eq(alternate_signature_header.type, "event", "alternate signature header verifies")
   assert_eq(
     alternate_signature_header.event.signature_status.state,
@@ -74,7 +77,7 @@ pipeline test_sourcehut_connector(task) {
   let enum_body = "{\"webhook\":{\"uuid\":\"delivery-2\",\"event\":\"GIT_POST_RECEIVE\"},\"repository\":{\"rid\":\"repo-1\",\"name\":\"widgets\",\"repoPath\":\"~ada/widgets\"}}"
   let sourcehut_enum_event = normalize_inbound(
     {
-      public_key: keypair.public,
+      binding_id: "primary",
       body_text: enum_body,
       headers: {"x-sourcehut-signature": ed25519_sign(keypair.private, enum_body)},
     },
@@ -90,7 +93,7 @@ pipeline test_sourcehut_connector(task) {
   let ticket_body = "{\"webhook\":{\"uuid\":\"ticket-1\",\"event\":\"TICKET_CREATED\",\"date\":\"2026-05-22T09:30:00Z\",\"ticket\":{\"id\":42,\"ref\":\"todo.sr.ht/~ada/widgets/42\",\"subject\":\"Fix widgets\"}},\"submitter\":{\"canonical_name\":\"~ada\"}}"
   let sourcehut_ticket_event = normalize_inbound(
     {
-      public_key: keypair.public,
+      binding_id: "primary",
       body_text: ticket_body,
       headers: {"x-sourcehut-signature": ed25519_sign(keypair.private, ticket_body)},
     },
@@ -106,7 +109,7 @@ pipeline test_sourcehut_connector(task) {
   let build_body = "{\"webhook\":{\"uuid\":\"job-1\",\"event\":\"JOB_UPDATED\",\"date\":\"2026-05-22T09:31:00Z\"},\"job\":{\"id\":7,\"status\":\"SUCCESS\"}}"
   let sourcehut_build_event = normalize_inbound(
     {
-      public_key: keypair.public,
+      binding_id: "primary",
       body_text: build_body,
       headers: {"x-sourcehut-signature": ed25519_sign(keypair.private, build_body)},
     },
@@ -118,13 +121,37 @@ pipeline test_sourcehut_connector(task) {
     "SUCCESS",
     "job resource is preserved",
   )
-  shutdown()
-  init()
-  let invalid_json = normalize_inbound({body_text: "{bad json", headers: headers})
+  let invalid_json = normalize_inbound(
+    {
+      binding_id: "primary",
+      body_text: "{bad json",
+      headers: headers + {"x-sourcehut-signature": "ed25519=" + ed25519_sign(keypair.private, "{bad json")},
+    },
+  )
   assert_eq(invalid_json.type, "reject", "invalid json rejects")
-  let unsupported_prefix = normalize_inbound({body_text: "{\"event\":\"repo.push_extra\"}", headers: {}})
+  let unsupported_prefix = normalize_inbound(
+    {
+      binding_id: "primary",
+      body_text: "{\"event\":\"repo.push_extra\"}",
+      headers: {
+        "x-sourcehut-signature": "ed25519="
+          + ed25519_sign(keypair.private, "{\"event\":\"repo.push_extra\"}"),
+      },
+    },
+  )
   assert_eq(unsupported_prefix.type, "reject", "unsupported prefix event rejects")
   assert_eq(unsupported_prefix.reject.status, 400, "unsupported prefix status")
+  // F1: absolute-URL path in api.request is rejected (SSRF guard).
+  let ssrf = call(
+    "api.request",
+    {
+      api_base_url: "https://git.sr.ht/query",
+      path: "https://attacker.example.com/steal",
+      api_token: "token",
+      rate_limit: false,
+    },
+  )
+  assert(is_err(ssrf), "absolute URL path rejected")
   http_mock_clear()
   http_mock(
     "GET",
@@ -133,7 +160,7 @@ pipeline test_sourcehut_connector(task) {
   )
   let response = call(
     "api.request",
-    {api_base_url: "https://git.sr.ht/query", path: "/projects", api_token: "token"},
+    {api_base_url: "https://git.sr.ht/query", path: "/projects", api_token: "token", rate_limit: false},
   )
   assert_eq(response.ok, true, "api request")
   let api_calls = http_mock_calls({redact_sensitive: false})
