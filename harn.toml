@@ -44,61 +44,58 @@ transient_provider_outage = "Retry after SourceHut API and webhook delivery endp
 [connector_contract]
 version = 1
 
+# Security sweep 2026-05-23 (F3): with no webhook public key configured for this binding the
+# connector now fail-closes with 401 missing_signature instead of accepting an unsigned
+# delivery. The contract harness does not seed per-binding public keys, so the formerly
+# "unsigned" happy-path fixtures invert to assert the rejection envelope. A future fixture-
+# seeding contract bump can restore "event" happy-paths that exercise full ed25519 verification
+# end-to-end.
 [[connector_contract.fixtures]]
 provider = "sourcehut"
-name = "happy path"
+name = "happy path (fail-closed when no public key)"
 kind = "webhook"
 headers = { "x-sourcehut-event" = "repo.push", "x-sourcehut-delivery" = "delivery-1" }
 body_json = { event = "repo.push", repository = { name = "~ada/widgets" }, pusher = { canonical_name = "~ada" }, commits = [{ id = "abc123" }] }
-expect_type = "event"
-expect_kind = "repo.push"
-expect_signature_state = "unsigned"
-expect_event_count = 1
-expect_payload_contains = { provider = "sourcehut", raw = { event = "repo.push" } }
+expect_type = "reject"
+expect_response_status = 401
+expect_event_count = 0
 
 [[connector_contract.fixtures]]
 provider = "sourcehut"
-name = "git post receive enum"
+name = "git post receive enum (fail-closed when no public key)"
 kind = "webhook"
 body_json = { webhook = { uuid = "delivery-2", event = "GIT_POST_RECEIVE" }, repository = { rid = "repo-1", name = "widgets", repoPath = "~ada/widgets" } }
-expect_type = "event"
-expect_kind = "git.post_receive"
-expect_dedupe_key = "sourcehut:git.post_receive:delivery-2"
-expect_signature_state = "unsigned"
-expect_event_count = 1
-expect_payload_contains = { provider = "sourcehut", raw = { delivery_id = "delivery-2", repository = { id = "repo-1", full_name = "~ada/widgets" } } }
+expect_type = "reject"
+expect_response_status = 401
+expect_event_count = 0
 
 [[connector_contract.fixtures]]
 provider = "sourcehut"
-name = "ticket created enum"
+name = "ticket created enum (fail-closed when no public key)"
 kind = "webhook"
 body_json = { webhook = { uuid = "ticket-1", event = "TICKET_CREATED", date = "2026-05-22T09:30:00Z", ticket = { id = 42, subject = "Fix widgets" } }, submitter = { canonical_name = "~ada" } }
-expect_type = "event"
-expect_kind = "ticket.created"
-expect_dedupe_key = "sourcehut:ticket.created:ticket-1"
-expect_signature_state = "unsigned"
-expect_event_count = 1
-expect_payload_contains = { provider = "sourcehut", raw = { event = "ticket.created", resource = { id = 42, subject = "Fix widgets" }, actor = { username = "~ada" } } }
+expect_type = "reject"
+expect_response_status = 401
+expect_event_count = 0
 
 [[connector_contract.fixtures]]
 provider = "sourcehut"
-name = "build job updated enum"
+name = "build job updated enum (fail-closed when no public key)"
 kind = "webhook"
 body_json = { webhook = { uuid = "job-1", event = "JOB_UPDATED", date = "2026-05-22T09:31:00Z" }, job = { id = 7, status = "SUCCESS" } }
-expect_type = "event"
-expect_kind = "build.updated"
-expect_dedupe_key = "sourcehut:build.updated:job-1"
-expect_signature_state = "unsigned"
-expect_event_count = 1
-expect_payload_contains = { provider = "sourcehut", raw = { event = "build.updated", resource = { id = 7, status = "SUCCESS" } } }
+expect_type = "reject"
+expect_response_status = 401
+expect_event_count = 0
 
+# F14 (verify before parse) means malformed/unsupported payloads without a configured public
+# key hit the F3 fail-closed path first and return 401 rather than 400.
 [[connector_contract.fixtures]]
 provider = "sourcehut"
 name = "unsupported prefix event"
 kind = "webhook"
 body_json = { event = "repo.push_extra" }
 expect_type = "reject"
-expect_response_status = 400
+expect_response_status = 401
 expect_event_count = 0
 
 [[connector_contract.fixtures]]
@@ -108,5 +105,5 @@ kind = "webhook"
 headers = { "x-sourcehut-event" = "repo.push" }
 body = "{not json"
 expect_type = "reject"
-expect_response_status = 400
+expect_response_status = 401
 expect_event_count = 0
