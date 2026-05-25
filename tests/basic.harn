@@ -11,6 +11,7 @@ import {
 
 @complexity(allow)
 pipeline test_sourcehut_connector(task) {
+  egress_policy({allow: ["git.sr.ht"], default: "deny"})
   shutdown()
   assert_eq(provider_id(), "sourcehut", "provider id")
   assert_eq(kinds()[0], "webhook", "first kind")
