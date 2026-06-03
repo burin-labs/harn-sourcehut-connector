@@ -11,7 +11,7 @@ import {
 
 @complexity(allow)
 pipeline test_sourcehut_connector(task) {
-  egress_policy({allow: ["git.sr.ht"], default: "deny"})
+  egress_policy({allow: ["git.sr.ht", "todo.sr.ht", "builds.sr.ht"], default: "deny"})
   shutdown()
   assert_eq(provider_id(), "sourcehut", "provider id")
   assert_eq(kinds()[0], "webhook", "first kind")
@@ -122,6 +122,27 @@ pipeline test_sourcehut_connector(task) {
     "SUCCESS",
     "job resource is preserved",
   )
+  assert_eq(
+    sourcehut_build_event.event.payload.build.status,
+    "SUCCESS",
+    "build summary lifts job status",
+  )
+  assert_eq(sourcehut_build_event.event.payload.build.succeeded, true, "build summary marks success")
+  assert_eq(sourcehut_build_event.event.payload.build.failed, false, "successful build is not failed")
+  // JOB_UPDATED with a failed status surfaces payload.build.failed clearly.
+  let failed_build_body = "{\"webhook\":{\"uuid\":\"job-2\",\"event\":\"JOB_UPDATED\",\"date\":\"2026-05-22T09:32:00Z\"},\"job\":{\"id\":8,\"status\":\"FAILED\"}}"
+  let sourcehut_failed_build = normalize_inbound(
+    {
+      binding_id: "primary",
+      body_text: failed_build_body,
+      headers: {"x-sourcehut-signature": ed25519_sign(keypair.private, failed_build_body)},
+    },
+  )
+  assert_eq(sourcehut_failed_build.type, "event", "failed build event verifies")
+  assert_eq(sourcehut_failed_build.event.kind, "build.updated", "failed build enum maps")
+  assert_eq(sourcehut_failed_build.event.payload.build.status, "FAILED", "failed build status lifted")
+  assert_eq(sourcehut_failed_build.event.payload.build.failed, true, "failed build flagged")
+  assert_eq(sourcehut_failed_build.event.payload.build.succeeded, false, "failed build not succeeded")
   let invalid_json = normalize_inbound(
     {
       binding_id: "primary",
@@ -280,6 +301,93 @@ pipeline test_sourcehut_connector(task) {
   let calls = http_mock_calls({include_sensitive: true})
   assert(contains(json_stringify(calls[0]), "content-type"), "graphql request sets content type")
   assert(contains(calls[1].body, "\"cursor\":\"page-2\""), "second page uses cursor")
+  // Typed convenience helpers target the service-specific GraphQL endpoint.
+  http_mock_clear()
+  http_mock(
+    "POST",
+    "https://todo.sr.ht/query",
+    {
+      status: 200,
+      body: json_stringify({data: {submitComment: {id: 99, created: "2026-05-22T10:00:00Z"}}}),
+    },
+  )
+  let commented = call(
+    "ticket.comment",
+    {
+      access_token: "token",
+      resolution: "fixed",
+      status: "resolved",
+      text: "thanks, fixed in r123",
+      ticket_id: 42,
+      tracker_id: 7,
+    },
+  )
+  assert_eq(commented.data.submitComment.id, 99, "ticket.comment returns submitComment event")
+  let comment_calls = http_mock_calls({include_sensitive: true})
+  assert(
+    contains(comment_calls[0].body, "submitComment"),
+    "ticket.comment uses submitComment mutation",
+  )
+  assert(
+    contains(comment_calls[0].body, "\"status\":\"RESOLVED\""),
+    "ticket.comment upcases status enum",
+  )
+  let missing_text = call("ticket.comment", {access_token: "token", ticket_id: 42, tracker_id: 7})
+  assert(is_err(missing_text), "ticket.comment requires text")
+  assert_eq(unwrap_err(missing_text).code, "invalid_args", "ticket.comment missing text code")
+  http_mock_clear()
+  http_mock(
+    "POST",
+    "https://todo.sr.ht/query",
+    {
+      status: 200,
+      body: json_stringify({data: {updateTicketStatus: {id: 100, created: "2026-05-22T10:01:00Z"}}}),
+    },
+  )
+  let status_updated = call(
+    "ticket.update_status",
+    {access_token: "token", resolution: "fixed", status: "resolved", ticket_id: 42, tracker_id: 7},
+  )
+  assert_eq(
+    status_updated.data.updateTicketStatus.id,
+    100,
+    "ticket.update_status returns updateTicketStatus event",
+  )
+  let status_calls = http_mock_calls({include_sensitive: true})
+  assert(
+    contains(status_calls[0].body, "updateTicketStatus"),
+    "ticket.update_status uses updateTicketStatus mutation",
+  )
+  let missing_status = call("ticket.update_status", {access_token: "token", ticket_id: 42, tracker_id: 7})
+  assert(is_err(missing_status), "ticket.update_status requires status")
+  http_mock_clear()
+  http_mock(
+    "POST",
+    "https://builds.sr.ht/query",
+    {status: 200, body: json_stringify({data: {job: {id: 8, note: nil, status: "FAILED"}}})},
+  )
+  let build_status = call("build.get", {access_token: "token", job_id: 8})
+  assert_eq(build_status.data.job.status, "FAILED", "build.get reads job status")
+  let build_get_calls = http_mock_calls({include_sensitive: true})
+  assert(contains(build_get_calls[0].body, "job(id:"), "build.get queries job by id")
+  let missing_job = call("build.get", {access_token: "token"})
+  assert(is_err(missing_job), "build.get requires job_id")
+  http_mock_clear()
+  http_mock(
+    "POST",
+    "https://builds.sr.ht/query",
+    {status: 200, body: json_stringify({data: {submit: {id: 9, note: nil, status: "PENDING"}}})},
+  )
+  let submitted = call(
+    "build.submit",
+    {access_token: "token", manifest: "image: alpine/edge\ntasks: []\n", note: "ci"},
+  )
+  assert_eq(submitted.data.submit.status, "PENDING", "build.submit returns created job status")
+  let submit_calls = http_mock_calls({include_sensitive: true})
+  assert(contains(submit_calls[0].body, "submit("), "build.submit uses submit mutation")
+  let missing_manifest = call("build.submit", {access_token: "token"})
+  assert(is_err(missing_manifest), "build.submit requires manifest")
+  http_mock_clear()
   let unsupported_source_control_helper = call("repository_file.get", {})
   assert(is_err(unsupported_source_control_helper), "provider-specific unsupported helper errors")
   assert_eq(
