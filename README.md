@@ -48,9 +48,29 @@ SourceHut GraphQL lists can be drained with `call("graphql.paginate", args)`;
 the helper follows SourceHut `{ results, cursor }` pages and returns
 `{ items, pages, next_cursor, complete }`.
 
-Provider-specific source-control shortcuts are intentionally not exposed here;
-use `api.request`, `graphql.request`, or `graphql.paginate` with the exact
-SourceHut GraphQL operation the workflow needs.
+## Typed convenience helpers
+
+Alongside the generic GraphQL escape hatches, the connector exposes a few typed
+`call` helpers over the SourceHut GraphQL APIs. Each targets the service-specific
+GraphQL endpoint (overridable via `api_base_url`) and wraps the exact upstream
+operation from the SourceHut schema:
+
+- `call("ticket.comment", {tracker_id, ticket_id, text, status?, resolution?})` —
+  todo.sr.ht `submitComment` mutation.
+- `call("ticket.update_status", {tracker_id, ticket_id, status, resolution?})` —
+  todo.sr.ht `updateTicketStatus` mutation (`resolution` is required by SourceHut
+  when `status` is `RESOLVED`).
+- `call("build.get", {job_id})` — builds.sr.ht `job(id)` query returning
+  `{ id, status, note }`.
+- `call("build.submit", {manifest, note?, tags?, secrets?, execute?, visibility?})` —
+  builds.sr.ht `submit` mutation.
+
+For anything else, use `api.request`, `graphql.request`, or `graphql.paginate`
+with the exact SourceHut GraphQL operation the workflow needs.
+
+Inbound `JOB_UPDATED` (`build.updated`) events carry a normalized
+`payload.build` summary `{status, failed, succeeded}` so workflows can branch on
+build failure (`failed` is set for `FAILED` / `TIMEOUT` / `CANCELLED`).
 
 ## Development
 

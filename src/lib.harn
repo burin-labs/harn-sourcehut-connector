@@ -79,7 +79,26 @@ let EVENT_ALIASES = {
 
 let DELIVERY_HEADERS = ["x-sourcehut-delivery", "x-srht-delivery"]
 
-let OUTBOUND_METHODS = ["api.request", "api.paginate", "graphql.request", "graphql.paginate"]
+// Each SourceHut service exposes its own GraphQL endpoint. The typed helpers below target the
+// service-specific endpoint; the generic graphql.request / api.request escape hatches default to
+// DEFAULT_API_BASE_URL (git.sr.ht) and honor an explicit api_base_url override.
+let TODO_API_BASE_URL = "https://todo.sr.ht/query"
+
+let BUILDS_API_BASE_URL = "https://builds.sr.ht/query"
+
+// SourceHut treats these JobStatus enum values as build failures (builds.sr.ht JobStatus).
+let FAILED_JOB_STATUSES = ["FAILED", "TIMEOUT", "CANCELLED"]
+
+let OUTBOUND_METHODS = [
+  "api.request",
+  "api.paginate",
+  "build.get",
+  "build.submit",
+  "graphql.request",
+  "graphql.paginate",
+  "ticket.comment",
+  "ticket.update_status",
+]
 
 /** Return this connector's provider id. */
 pub fn provider_id() {
@@ -208,6 +227,18 @@ pub fn call(method, args = {}) {
   }
   if method == "graphql.request" {
     return __graphql_request(args ?? {})
+  }
+  if method == "ticket.comment" {
+    return __ticket_comment(args ?? {})
+  }
+  if method == "ticket.update_status" {
+    return __ticket_update_status(args ?? {})
+  }
+  if method == "build.get" {
+    return __build_get(args ?? {})
+  }
+  if method == "build.submit" {
+    return __build_submit(args ?? {})
   }
   return __method_not_found(method)
 }
@@ -425,6 +456,7 @@ fn __build_event(base_event, payload, raw, headers, signature_status, body_text)
       provider: PROVIDER_ID,
       event: base_event,
       action: payload?.action,
+      build: __build_summary(base_event, payload),
       delivery_id: __delivery_id(payload, headers),
       repository: __repository(payload),
       actor: __actor(payload),
@@ -433,6 +465,26 @@ fn __build_event(base_event, payload, raw, headers, signature_status, body_text)
     },
     headers: __normalized_headers(headers),
   }
+}
+
+/**
+ * Surface build (builds.sr.ht JOB_UPDATED / build.updated) outcome clearly. For build events
+ * we lift the job's JobStatus onto the payload and flag failures (FAILED / TIMEOUT / CANCELLED)
+ * so a workflow can branch on `payload.build.failed` without re-deriving it from raw enum casing.
+ * Non-build events return nil so the field is absent.
+ */
+fn __build_summary(base_event, payload) {
+  let normalized = __normalize_kind(base_event)
+  if !starts_with(normalized, "build.") && normalized != "build" {
+    return nil
+  }
+  let job = payload?.job ?? payload?.webhook?.job ?? payload?.build ?? {}
+  let status = job?.status ?? payload?.status
+  if status == nil || trim(to_string(status)) == "" {
+    return {status: nil, failed: false, succeeded: false}
+  }
+  let upper = uppercase(trim(to_string(status)))
+  return {status: upper, failed: contains(FAILED_JOB_STATUSES, upper), succeeded: upper == "SUCCESS"}
 }
 
 fn __occurred_at(payload, raw) {
@@ -780,6 +832,177 @@ fn __graphql_request(args) {
     )
   }
   return envelope
+}
+
+/**
+ * Resolve a required positive integer id argument (SourceHut GraphQL uses Int! ids).
+ * Returns Ok(int) or an invalid_args Err naming the field.
+ */
+fn __require_int(args, names, label) {
+  for name in names {
+    let value = args.get(name)
+    if value != nil && trim(to_string(value)) != "" {
+      let parsed = try {
+        to_int(value)
+      }
+      if is_ok(parsed) {
+        return Ok(unwrap(parsed))
+      }
+      return __err("invalid_args", label + " must be an integer")
+    }
+  }
+  return __err("invalid_args", label + " is required")
+}
+
+/**
+ * Post a comment on a todo.sr.ht ticket via the `submitComment` mutation (todo.sr.ht GraphQL).
+ *
+ * Required args: tracker_id (Int), ticket_id (Int), text (String).
+ * Optional args: status (TicketStatus enum string), resolution (TicketResolution enum string)
+ * to change the ticket state alongside the comment. Override the endpoint with api_base_url.
+ *
+ * Schema reference (todo.sr.ht api/graph/schema.graphqls):
+ *   submitComment(trackerId: Int!, ticketId: Int!, input: SubmitCommentInput!): Event!
+ *   input SubmitCommentInput { text: String!, status: TicketStatus, resolution: TicketResolution }
+ */
+fn __ticket_comment(args) {
+  let tracker = __require_int(args, ["tracker_id", "trackerId"], "tracker_id")
+  if is_err(tracker) {
+    return tracker
+  }
+  let ticket = __require_int(args, ["ticket_id", "ticketId"], "ticket_id")
+  if is_err(ticket) {
+    return ticket
+  }
+  let text = args?.text ?? args?.body ?? args?.comment
+  if text == nil || trim(to_string(text)) == "" {
+    return __err("invalid_args", "ticket.comment requires text")
+  }
+  var input = {text: to_string(text)}
+  if args?.status != nil && trim(to_string(args.status)) != "" {
+    input["status"] = uppercase(to_string(args.status))
+  }
+  if args?.resolution != nil && trim(to_string(args.resolution)) != "" {
+    input["resolution"] = uppercase(to_string(args.resolution))
+  }
+  let query = "mutation SubmitComment($trackerId: Int!, $ticketId: Int!, $input: SubmitCommentInput!) "
+    + "{ submitComment(trackerId: $trackerId, ticketId: $ticketId, input: $input) { id created } }"
+  return __graphql_request(
+    args
+      + {
+      api_base_url: args?.api_base_url ?? TODO_API_BASE_URL,
+      query: query,
+      variables: {trackerId: unwrap(tracker), ticketId: unwrap(ticket), input: input},
+    },
+  )
+}
+
+/**
+ * Update a todo.sr.ht ticket's status/resolution via the `updateTicketStatus` mutation.
+ *
+ * Required args: tracker_id (Int), ticket_id (Int), status (TicketStatus enum string).
+ * Optional args: resolution (TicketResolution enum string; required by SourceHut when status is
+ * RESOLVED). Override the endpoint with api_base_url.
+ *
+ * Schema reference (todo.sr.ht api/graph/schema.graphqls):
+ *   updateTicketStatus(trackerId: Int!, ticketId: Int!, input: UpdateStatusInput!): Event!
+ *   input UpdateStatusInput { status: TicketStatus!, resolution: TicketResolution }
+ */
+fn __ticket_update_status(args) {
+  let tracker = __require_int(args, ["tracker_id", "trackerId"], "tracker_id")
+  if is_err(tracker) {
+    return tracker
+  }
+  let ticket = __require_int(args, ["ticket_id", "ticketId"], "ticket_id")
+  if is_err(ticket) {
+    return ticket
+  }
+  if args?.status == nil || trim(to_string(args.status)) == "" {
+    return __err("invalid_args", "ticket.update_status requires status")
+  }
+  var input = {status: uppercase(to_string(args.status))}
+  if args?.resolution != nil && trim(to_string(args.resolution)) != "" {
+    input["resolution"] = uppercase(to_string(args.resolution))
+  }
+  let query = "mutation UpdateTicketStatus($trackerId: Int!, $ticketId: Int!, $input: UpdateStatusInput!) "
+    + "{ updateTicketStatus(trackerId: $trackerId, ticketId: $ticketId, input: $input) { id created } }"
+  return __graphql_request(
+    args
+      + {
+      api_base_url: args?.api_base_url ?? TODO_API_BASE_URL,
+      query: query,
+      variables: {trackerId: unwrap(tracker), ticketId: unwrap(ticket), input: input},
+    },
+  )
+}
+
+/**
+ * Read a builds.sr.ht job's status via the `job` query.
+ *
+ * Required args: job_id (Int). Override the endpoint with api_base_url.
+ * Returns the GraphQL envelope; the resolved `data.job.status` is one of the JobStatus enum
+ * values (PENDING, QUEUED, RUNNING, SUCCESS, FAILED, TIMEOUT, CANCELLED).
+ *
+ * Schema reference (builds.sr.ht api/graph/schema.graphqls):
+ *   job(id: Int!): Job   type Job { id: Int!, status: JobStatus!, note: String }
+ */
+fn __build_get(args) {
+  let job = __require_int(args, ["job_id", "jobId", "id"], "job_id")
+  if is_err(job) {
+    return job
+  }
+  let query = "query BuildJob($id: Int!) { job(id: $id) { id status note } }"
+  return __graphql_request(
+    args
+      + {
+      api_base_url: args?.api_base_url ?? BUILDS_API_BASE_URL,
+      query: query,
+      variables: {id: unwrap(job)},
+    },
+  )
+}
+
+/**
+ * Submit a build to builds.sr.ht via the `submit` mutation, returning the created job's status.
+ *
+ * Required args: manifest (String — a build manifest YAML document).
+ * Optional args: note (String), tags ([String]), secrets (Bool), execute (Bool),
+ * visibility (Visibility enum string). Override the endpoint with api_base_url.
+ *
+ * Schema reference (builds.sr.ht api/graph/schema.graphqls):
+ *   submit(manifest: String!, tags: [String!], note: String, secrets: Boolean,
+ *          execute: Boolean, visibility: Visibility): Job!
+ */
+@complexity(allow)
+fn __build_submit(args) {
+  let manifest = args?.manifest
+  if manifest == nil || trim(to_string(manifest)) == "" {
+    return __err("invalid_args", "build.submit requires manifest")
+  }
+  var variables = {manifest: to_string(manifest)}
+  if args?.note != nil && trim(to_string(args.note)) != "" {
+    variables["note"] = to_string(args.note)
+  }
+  if args?.tags != nil {
+    variables["tags"] = args.tags
+  }
+  if type_of(args?.secrets) == "bool" {
+    variables["secrets"] = args.secrets
+  }
+  if type_of(args?.execute) == "bool" {
+    variables["execute"] = args.execute
+  }
+  if args?.visibility != nil && trim(to_string(args.visibility)) != "" {
+    variables["visibility"] = uppercase(to_string(args.visibility))
+  }
+  let query = "mutation SubmitBuild($manifest: String!, $note: String, $tags: [String!], "
+    + "$secrets: Boolean, $execute: Boolean, $visibility: Visibility) "
+    + "{ submit(manifest: $manifest, note: $note, tags: $tags, secrets: $secrets, "
+    + "execute: $execute, visibility: $visibility) { id status note } }"
+  return __graphql_request(
+    args
+      + {api_base_url: args?.api_base_url ?? BUILDS_API_BASE_URL, query: query, variables: variables},
+  )
 }
 
 fn __first_cursor_page(value) {

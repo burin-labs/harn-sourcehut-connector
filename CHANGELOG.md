@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Added typed outbound `call` helpers over the SourceHut GraphQL APIs (forge parity, C5):
+  - `ticket.comment` — posts a comment on a todo.sr.ht ticket via the `submitComment` mutation
+    (`submitComment(trackerId, ticketId, input: SubmitCommentInput!)`); optional `status` /
+    `resolution` upgrade the ticket state alongside the comment. Required args `tracker_id`,
+    `ticket_id`, `text`.
+  - `ticket.update_status` — updates a todo.sr.ht ticket via the `updateTicketStatus` mutation
+    (`updateTicketStatus(trackerId, ticketId, input: UpdateStatusInput!)`). Required args
+    `tracker_id`, `ticket_id`, `status` (SourceHut requires `resolution` when status is
+    `RESOLVED`).
+  - `build.get` — reads a builds.sr.ht job status via the `job(id: Int!): Job` query
+    (`{ id, status, note }`). Required arg `job_id`.
+  - `build.submit` — submits a build via the builds.sr.ht `submit(manifest: String!, ...)`
+    mutation. Required arg `manifest`; optional `note` / `tags` / `secrets` / `execute` /
+    `visibility`.
+  - Each helper is a thin, documented wrapper over `graphql.request` that targets the
+    service-specific GraphQL endpoint (`https://todo.sr.ht/query`, `https://builds.sr.ht/query`)
+    and honors an explicit `api_base_url` override. Operation names, argument names, input
+    object fields, and enum values were taken verbatim from the upstream SourceHut
+    `api/graph/schema.graphqls` for todo.sr.ht and builds.sr.ht — none were invented. The
+    generic `graphql.request` / `api.request` / `graphql.paginate` escape hatches are unchanged.
+- `normalize_inbound` now surfaces build outcome clearly for `JOB_UPDATED` / `build.updated`:
+  the event `payload.build` carries `{status, failed, succeeded}` where `failed` is true for the
+  builds.sr.ht `FAILED` / `TIMEOUT` / `CANCELLED` JobStatus values, so workflows can branch on
+  build failure without re-deriving it from raw enum casing.
 - Security sweep 2026-05-23 (hardening, fail-closed defaults):
   - **F1 (CRITICAL) SSRF:** `__api_url` rejects absolute-URL `path` arguments so the
     configured `api_base_url` (and any attached `Authorization` header) cannot be redirected
