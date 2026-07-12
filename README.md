@@ -24,9 +24,12 @@ harn-sourcehut-connector = { path = "../harn-sourcehut-connector" }
 
 ## Webhook verification
 
-The connector accepts unsigned events only when no verification material is set.
-Provide `public_key`, `webhook_public_key`, or the
-`sourcehut/webhook-public-key` secret for SourceHut Ed25519 verification.
+SourceHut webhooks must be signed. Provide `public_key`,
+`webhook_public_key`, or the `sourcehut/webhook-public-key` secret; the
+connector verifies the `x-sourcehut-signature`, `x-srht-signature`, or
+`x-signature-ed25519` Ed25519 signature against the raw request body and rejects
+requests with no configured public key, missing binding id, missing signature,
+or invalid signature.
 
 SourceHut GraphQL webhook enum names such as `GIT_POST_RECEIVE` and
 `REPO_UPDATE` are accepted and mapped to Harn event kinds such as
