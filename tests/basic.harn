@@ -19,9 +19,12 @@ pipeline test_sourcehut_connector(task) {
   const keypair = ed25519_keypair()
   // Seed the public key via init(ctx) — never via inbound `raw.public_key`.
   init({public_key: keypair.public})
-  const activated = activate([{id: "primary", path: "/hooks/sourcehut", secrets: {public_key: keypair.public}}])
+  const activated = activate(
+    [{id: "primary", path: "/hooks/sourcehut", secrets: {public_key: keypair.public}}],
+  )
   assert_eq(activated.bindings, 1, "activation count")
-  const body = "{\"event\":\"repo.push\",\"repository\":{\"name\":\"~ada/widgets\",\"url\":\"https://git.sr.ht/~ada/widgets\"},\"pusher\":{\"canonical_name\":\"~ada\"},\"commits\":[{\"id\":\"abc123\"}]}"
+  const body =
+    "{\"event\":\"repo.push\",\"repository\":{\"name\":\"~ada/widgets\",\"url\":\"https://git.sr.ht/~ada/widgets\"},\"pusher\":{\"canonical_name\":\"~ada\"},\"commits\":[{\"id\":\"abc123\"}]}"
   const headers = {"x-sourcehut-event": "repo.push", "x-sourcehut-delivery": "delivery-1"}
   const signature = ed25519_sign(keypair.private, body)
   const raw = {
@@ -35,7 +38,11 @@ pipeline test_sourcehut_connector(task) {
   assert_eq(normalized.event.signature_status.state, "verified", "signed status")
   assert(normalized.event.dedupe_key != nil && normalized.event.dedupe_key != "", "dedupe key")
   const bad_signature = normalize_inbound(
-    {binding_id: "primary", body_text: body, headers: headers + {"x-sourcehut-signature": "ed25519=00"}},
+    {
+      binding_id: "primary",
+      body_text: body,
+      headers: headers + {"x-sourcehut-signature": "ed25519=00"},
+    },
   )
   assert_eq(bad_signature.type, "reject", "bad signature rejects")
   assert_eq(bad_signature.reject.status, 401, "bad signature status")
@@ -48,7 +55,9 @@ pipeline test_sourcehut_connector(task) {
   )
   assert_eq(wrong_signature_scheme.type, "reject", "wrong signature scheme rejects")
   assert_eq(wrong_signature_scheme.reject.status, 401, "wrong signature scheme status")
-  const missing_signature = normalize_inbound({binding_id: "primary", body_text: body, headers: headers})
+  const missing_signature = normalize_inbound(
+    {binding_id: "primary", body_text: body, headers: headers},
+  )
   assert_eq(
     missing_signature.type,
     "reject",
@@ -75,7 +84,8 @@ pipeline test_sourcehut_connector(task) {
     signature,
     "alternate signature header is preserved",
   )
-  const enum_body = "{\"webhook\":{\"uuid\":\"delivery-2\",\"event\":\"GIT_POST_RECEIVE\"},\"repository\":{\"rid\":\"repo-1\",\"name\":\"widgets\",\"repoPath\":\"~ada/widgets\"}}"
+  const enum_body =
+    "{\"webhook\":{\"uuid\":\"delivery-2\",\"event\":\"GIT_POST_RECEIVE\"},\"repository\":{\"rid\":\"repo-1\",\"name\":\"widgets\",\"repoPath\":\"~ada/widgets\"}}"
   const sourcehut_enum_event = normalize_inbound(
     {
       binding_id: "primary",
@@ -91,7 +101,8 @@ pipeline test_sourcehut_connector(task) {
     "delivery-2",
     "payload carries delivery id",
   )
-  const ticket_body = "{\"webhook\":{\"uuid\":\"ticket-1\",\"event\":\"TICKET_CREATED\",\"date\":\"2026-05-22T09:30:00Z\",\"ticket\":{\"id\":42,\"ref\":\"todo.sr.ht/~ada/widgets/42\",\"subject\":\"Fix widgets\"}},\"submitter\":{\"canonical_name\":\"~ada\"}}"
+  const ticket_body =
+    "{\"webhook\":{\"uuid\":\"ticket-1\",\"event\":\"TICKET_CREATED\",\"date\":\"2026-05-22T09:30:00Z\",\"ticket\":{\"id\":42,\"ref\":\"todo.sr.ht/~ada/widgets/42\",\"subject\":\"Fix widgets\"}},\"submitter\":{\"canonical_name\":\"~ada\"}}"
   const sourcehut_ticket_event = normalize_inbound(
     {
       binding_id: "primary",
@@ -107,7 +118,8 @@ pipeline test_sourcehut_connector(task) {
     "SourceHut webhook date maps to occurred_at",
   )
   assert_eq(sourcehut_ticket_event.event.payload.resource.id, 42, "ticket resource is preserved")
-  const build_body = "{\"webhook\":{\"uuid\":\"job-1\",\"event\":\"JOB_UPDATED\",\"date\":\"2026-05-22T09:31:00Z\"},\"job\":{\"id\":7,\"status\":\"SUCCESS\"}}"
+  const build_body =
+    "{\"webhook\":{\"uuid\":\"job-1\",\"event\":\"JOB_UPDATED\",\"date\":\"2026-05-22T09:31:00Z\"},\"job\":{\"id\":7,\"status\":\"SUCCESS\"}}"
   const sourcehut_build_event = normalize_inbound(
     {
       binding_id: "primary",
@@ -127,10 +139,19 @@ pipeline test_sourcehut_connector(task) {
     "SUCCESS",
     "build summary lifts job status",
   )
-  assert_eq(sourcehut_build_event.event.payload.build.succeeded, true, "build summary marks success")
-  assert_eq(sourcehut_build_event.event.payload.build.failed, false, "successful build is not failed")
+  assert_eq(
+    sourcehut_build_event.event.payload.build.succeeded,
+    true,
+    "build summary marks success",
+  )
+  assert_eq(
+    sourcehut_build_event.event.payload.build.failed,
+    false,
+    "successful build is not failed",
+  )
   // JOB_UPDATED with a failed status surfaces payload.build.failed clearly.
-  const failed_build_body = "{\"webhook\":{\"uuid\":\"job-2\",\"event\":\"JOB_UPDATED\",\"date\":\"2026-05-22T09:32:00Z\"},\"job\":{\"id\":8,\"status\":\"FAILED\"}}"
+  const failed_build_body =
+    "{\"webhook\":{\"uuid\":\"job-2\",\"event\":\"JOB_UPDATED\",\"date\":\"2026-05-22T09:32:00Z\"},\"job\":{\"id\":8,\"status\":\"FAILED\"}}"
   const sourcehut_failed_build = normalize_inbound(
     {
       binding_id: "primary",
@@ -140,14 +161,25 @@ pipeline test_sourcehut_connector(task) {
   )
   assert_eq(sourcehut_failed_build.type, "event", "failed build event verifies")
   assert_eq(sourcehut_failed_build.event.kind, "build.updated", "failed build enum maps")
-  assert_eq(sourcehut_failed_build.event.payload.build.status, "FAILED", "failed build status lifted")
+  assert_eq(
+    sourcehut_failed_build.event.payload.build.status,
+    "FAILED",
+    "failed build status lifted",
+  )
   assert_eq(sourcehut_failed_build.event.payload.build.failed, true, "failed build flagged")
-  assert_eq(sourcehut_failed_build.event.payload.build.succeeded, false, "failed build not succeeded")
+  assert_eq(
+    sourcehut_failed_build.event.payload.build.succeeded,
+    false,
+    "failed build not succeeded",
+  )
   const invalid_json = normalize_inbound(
     {
       binding_id: "primary",
       body_text: "{bad json",
-      headers: headers + {"x-sourcehut-signature": "ed25519=" + ed25519_sign(keypair.private, "{bad json")},
+      headers: headers
+        + {
+        "x-sourcehut-signature": "ed25519=" + ed25519_sign(keypair.private, "{bad json"),
+      },
     },
   )
   assert_eq(invalid_json.type, "reject", "invalid json rejects")
@@ -157,7 +189,10 @@ pipeline test_sourcehut_connector(task) {
       body_text: "{\"event\":\"repo.push_extra\"}",
       headers: {
         "x-sourcehut-signature": "ed25519="
-          + ed25519_sign(keypair.private, "{\"event\":\"repo.push_extra\"}"),
+          + ed25519_sign(
+          keypair.private,
+          "{\"event\":\"repo.push_extra\"}",
+        ),
       },
     },
   )
@@ -182,7 +217,12 @@ pipeline test_sourcehut_connector(task) {
   )
   const response = call(
     "api.request",
-    {api_base_url: "https://git.sr.ht/query", path: "/projects", api_token: "token", rate_limit: false},
+    {
+      api_base_url: "https://git.sr.ht/query",
+      path: "/projects",
+      api_token: "token",
+      rate_limit: false,
+    },
   )
   assert_eq(response.ok, true, "api request")
   const api_calls = http_mock_calls({redact_sensitive: false})
@@ -195,7 +235,11 @@ pipeline test_sourcehut_connector(task) {
     "https://git.sr.ht/query/projects",
     {
       status: 200,
-      headers: {"x-ratelimit-limit": "10", "x-ratelimit-remaining": "9", "x-ratelimit-reset": "1776859300"},
+      headers: {
+        "x-ratelimit-limit": "10",
+        "x-ratelimit-remaining": "9",
+        "x-ratelimit-reset": "1776859300",
+      },
       body: json_stringify({ok: true}),
     },
   )
@@ -275,7 +319,9 @@ pipeline test_sourcehut_connector(task) {
       responses: [
         {
           status: 200,
-          body: json_stringify({data: {repositories: {results: [{name: "alpha"}], cursor: "page-2"}}}),
+          body: json_stringify(
+            {data: {repositories: {results: [{name: "alpha"}], cursor: "page-2"}}},
+          ),
         },
         {
           status: 200,
@@ -289,7 +335,8 @@ pipeline test_sourcehut_connector(task) {
     {
       api_base_url: "https://git.sr.ht/query",
       access_token: "token",
-      query: "query Repositories($cursor: Cursor) { repositories(cursor: $cursor) { results { name } cursor } }",
+      query:
+        "query Repositories($cursor: Cursor) { repositories(cursor: $cursor) { results { name } cursor } }",
       page_path: "/repositories",
       rate_limit: false,
     },
@@ -341,7 +388,9 @@ pipeline test_sourcehut_connector(task) {
     "https://todo.sr.ht/query",
     {
       status: 200,
-      body: json_stringify({data: {updateTicketStatus: {id: 100, created: "2026-05-22T10:01:00Z"}}}),
+      body: json_stringify(
+        {data: {updateTicketStatus: {id: 100, created: "2026-05-22T10:01:00Z"}}},
+      ),
     },
   )
   const status_updated = call(
@@ -358,7 +407,10 @@ pipeline test_sourcehut_connector(task) {
     contains(status_calls[0].body, "updateTicketStatus"),
     "ticket.update_status uses updateTicketStatus mutation",
   )
-  const missing_status = call("ticket.update_status", {access_token: "token", ticket_id: 42, tracker_id: 7})
+  const missing_status = call(
+    "ticket.update_status",
+    {access_token: "token", ticket_id: 42, tracker_id: 7},
+  )
   assert(is_err(missing_status), "ticket.update_status requires status")
   http_mock_clear()
   http_mock(

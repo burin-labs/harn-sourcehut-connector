@@ -144,7 +144,8 @@ pub fn activate(bindings = []) {
   let by_id = {}
   let seen_paths = {}
   for binding in bindings ?? [] {
-    const binding_id = (binding?.binding_id ?? binding?.id ?? "binding-") + to_string(len(by_id.keys()))
+    const binding_id = (binding?.binding_id ?? binding?.id ?? "binding-")
+      + to_string(len(by_id.keys()))
     const path = binding?.path ?? binding?.match?.path
     if path != nil && path != "" {
       if seen_paths.get(path) {
@@ -200,7 +201,11 @@ pub fn normalize_inbound(raw) {
   const signature_status = unwrap(verified)
   const base_event = __base_event(payload, headers)
   if base_event == nil || base_event == "" {
-    return __reject(400, "missing_event", "missing " + PROVIDER_ID + " event header or payload event")
+    return __reject(
+      400,
+      "missing_event",
+      "missing " + PROVIDER_ID + " event header or payload event",
+    )
   }
   if !__supports_event(base_event) {
     return __reject(
@@ -284,7 +289,9 @@ fn __reject_err(err) {
   const code = err?.code ?? "rejected"
   const status = if code == "invalid_signature" || code == "missing_signature" {
     401
-  } else if code == "missing_binding_id" || code == "missing_body" || code == "invalid_body" {
+  } else if code == "missing_binding_id" || code == "missing_body"
+    || code
+    == "invalid_body" {
     400
   } else {
     400
@@ -307,7 +314,9 @@ fn __base_event(payload, headers) {
   if from_header != nil && from_header != "" {
     return __sourcehut_event_alias(from_header)
   }
-  const raw_event = payload?.event ?? payload?.webhook?.event ?? payload?.event_name ?? payload?.object_kind
+  const raw_event = payload?.event ?? payload?.webhook?.event ?? payload?.event_name
+    ?? payload
+    ?.object_kind
     ?? payload?.type
     ?? payload?.action
   return __sourcehut_event_alias(raw_event)
@@ -347,7 +356,10 @@ fn __verify_signature(raw, headers, body_text) {
 fn __verify_ed25519(raw, headers, body_text) {
   const binding_id = raw?.metadata?.binding_id ?? raw?.binding_id
   if binding_id == nil || trim(to_string(binding_id)) == "" {
-    return __err("missing_binding_id", "request did not include a binding_id; cannot resolve public key")
+    return __err(
+      "missing_binding_id",
+      "request did not include a binding_id; cannot resolve public key",
+    )
   }
   const public_key = __webhook_public_key(raw)
   // Fail-closed: refuse delivery when no public key is configured for this binding.
@@ -355,9 +367,15 @@ fn __verify_ed25519(raw, headers, body_text) {
     return __err("missing_signature", "no webhook public_key configured for this binding")
   }
   const signature = __header(headers, SIGNATURE_HEADER) ?? __header(headers, "x-srht-signature")
-    ?? __header(headers, "x-signature-ed25519")
+    ?? __header(
+    headers,
+    "x-signature-ed25519",
+  )
   if signature == nil || signature == "" {
-    return __err("missing_signature", "ed25519 signature header missing but public_key is configured")
+    return __err(
+      "missing_signature",
+      "ed25519 signature header missing but public_key is configured",
+    )
   }
   const raw_signature = __strip_signature_prefix(signature)
   const verified = try {
@@ -401,7 +419,9 @@ fn __signed_surface(raw) {
 @complexity(allow)
 fn __webhook_public_key(raw) {
   const state = __state()
-  const ctx_key = state?.ctx?.public_key ?? state?.ctx?.webhook_public_key ?? state?.ctx?.secrets?.public_key
+  const ctx_key = state?.ctx?.public_key ?? state?.ctx?.webhook_public_key
+    ?? state?.ctx?.secrets
+    ?.public_key
   if ctx_key != nil && trim(to_string(ctx_key)) != "" {
     return to_string(ctx_key)
   }
@@ -412,7 +432,8 @@ fn __webhook_public_key(raw) {
   const bindings = state?.bindings ?? {}
   const binding = bindings.get(binding_id)
   const bound = binding?.public_key ?? binding?.webhook_public_key ?? binding?.secrets?.public_key
-    ?? binding?.config?.public_key
+    ?? binding
+    ?.config?.public_key
   if bound != nil && trim(to_string(bound)) != "" {
     return to_string(bound)
   }
@@ -484,12 +505,17 @@ fn __build_summary(base_event, payload) {
     return {status: nil, failed: false, succeeded: false}
   }
   const upper = uppercase(trim(to_string(status)))
-  return {status: upper, failed: contains(FAILED_JOB_STATUSES, upper), succeeded: upper == "SUCCESS"}
+  return {
+    status: upper,
+    failed: contains(FAILED_JOB_STATUSES, upper),
+    succeeded: upper == "SUCCESS",
+  }
 }
 
 fn __occurred_at(payload, raw) {
   return raw?.occurred_at ?? payload?.webhook?.date ?? payload?.date ?? payload?.updated_at
-    ?? payload?.created_at
+    ?? payload
+    ?.created_at
     ?? payload?.timestamp
 }
 
@@ -502,7 +528,8 @@ fn __signature_status(status) {
 
 fn __event_kind(base_event, payload) {
   const normalized = __normalize_kind(base_event)
-  const action = payload?.action ?? payload?.pullrequest?.state ?? payload?.object_attributes?.action
+  const action = payload?.action ?? payload?.pullrequest?.state
+    ?? payload?.object_attributes?.action
   if action == nil || action == "" || contains(normalized, ".") {
     return normalized
   }
@@ -518,13 +545,16 @@ fn __repository(payload) {
   return {
     id: repo?.id ?? repo?.uuid ?? repo?.rid,
     name: repo?.name,
-    full_name: repo?.full_name ?? repo?.path_with_namespace ?? repo?.canonical_name ?? repo?.repoPath,
+    full_name: repo?.full_name ?? repo?.path_with_namespace ?? repo?.canonical_name
+      ?? repo?.repoPath,
     url: repo?.html_url ?? repo?.web_url ?? repo?.links?.html?.href ?? repo?.url,
   }
 }
 
 fn __actor(payload) {
-  const actor = payload?.sender ?? payload?.user ?? payload?.actor ?? payload?.pusher ?? payload?.submitter
+  const actor = payload?.sender ?? payload?.user ?? payload?.actor ?? payload?.pusher
+    ?? payload
+    ?.submitter
     ?? payload?.owner
     ?? payload?.webhook?.sender
     ?? payload?.webhook?.user
@@ -539,7 +569,8 @@ fn __actor(payload) {
 
 fn __resource(payload) {
   return payload?.pull_request ?? payload?.pullrequest ?? payload?.ticket ?? payload?.tracker
-    ?? payload?.label
+    ?? payload
+    ?.label
     ?? payload?.job
     ?? payload?.email
     ?? payload?.patchset
@@ -556,7 +587,11 @@ fn __resource(payload) {
     ?? payload?.release
     ?? payload?.object_attributes
     ?? payload?.webhook
-    ?? {revision: payload?.revision, changed_paths: payload?.changed_paths, commits: payload?.commits}
+    ?? {
+    revision: payload?.revision,
+    changed_paths: payload?.changed_paths,
+    commits: payload?.commits,
+  }
 }
 
 fn __dedupe_key(base_event, payload, raw, headers, body_text) {
@@ -573,7 +608,9 @@ fn __dedupe_key(base_event, payload, raw, headers, body_text) {
   const received_at = raw?.received_at ?? raw?.occurred_at ?? ""
   const body_b64 = raw?.body_base64 ?? body_text
   return PROVIDER_ID + ":" + __normalize_kind(base_event) + ":"
-    + sha256(to_string(body_b64) + "|" + to_string(received_at) + "|" + to_string(binding_id))
+    + sha256(
+    to_string(body_b64) + "|" + to_string(received_at) + "|" + to_string(binding_id),
+  )
 }
 
 fn __delivery_id(payload, headers) {
@@ -661,11 +698,27 @@ fn __int_header(headers, name) {
 }
 
 fn __rate_limit_meta(headers) {
-  const retry_after_seconds = __int_header(headers, "retry-after") ?? __int_header(headers, "x-ratelimit-retry-after")
+  const retry_after_seconds = __int_header(headers, "retry-after")
+    ?? __int_header(
+    headers,
+    "x-ratelimit-retry-after",
+  )
   return {
-    requests_limit: __int_header(headers, "x-ratelimit-limit") ?? __int_header(headers, "ratelimit-limit"),
-    requests_remaining: __int_header(headers, "x-ratelimit-remaining") ?? __int_header(headers, "ratelimit-remaining"),
-    requests_reset: __int_header(headers, "x-ratelimit-reset") ?? __int_header(headers, "ratelimit-reset"),
+    requests_limit: __int_header(headers, "x-ratelimit-limit")
+      ?? __int_header(
+      headers,
+      "ratelimit-limit",
+    ),
+    requests_remaining: __int_header(headers, "x-ratelimit-remaining")
+      ?? __int_header(
+      headers,
+      "ratelimit-remaining",
+    ),
+    requests_reset: __int_header(headers, "x-ratelimit-reset")
+      ?? __int_header(
+      headers,
+      "ratelimit-reset",
+    ),
     retry_after_seconds: retry_after_seconds,
     retry_after_ms: if retry_after_seconds == nil {
       nil
@@ -679,7 +732,10 @@ fn __response_meta(response) {
   return {
     status: response?.status,
     request_id: __header(response?.headers ?? {}, "x-request-id")
-      ?? __header(response?.headers ?? {}, "x-srht-request-id"),
+      ?? __header(
+      response?.headers ?? {},
+      "x-srht-request-id",
+    ),
     rate_limit: __rate_limit_meta(response?.headers ?? {}),
   }
 }
@@ -712,7 +768,11 @@ fn __acquire_rate_limit(args, cfg) {
   const scope = __rate_limit_scope(args, cfg)
   const current = __state()
   let rate_limits = current?.rate_limits ?? {}
-  const bucket = rate_limit_token_bucket(rate_limits.get(scope), __rate_limit_config(args), args?.now_ms)
+  const bucket = rate_limit_token_bucket(
+    rate_limits.get(scope),
+    __rate_limit_config(args),
+    args?.now_ms,
+  )
   rate_limits[scope] = bucket.state
   __set_state(current + {rate_limits: rate_limits})
   if !bucket.allowed {
@@ -798,7 +858,13 @@ fn __api_request(args) {
     return {status: response.status, headers: response.headers, body: ""}
   }
   if __include_meta(args ?? {}) {
-    return {ok: true, status: response.status, headers: response.headers, data: response.json, meta: meta}
+    return {
+      ok: true,
+      status: response.status,
+      headers: response.headers,
+      data: response.json,
+      meta: meta,
+    }
   }
   return response.json
 }
@@ -828,7 +894,12 @@ fn __graphql_request(args) {
     return __err_meta(
       "graphql_error",
       PROVIDER_ID + " GraphQL request failed",
-      {status: envelope.meta.status, errors: envelope.errors, data: envelope.data, meta: envelope.meta},
+      {
+        status: envelope.meta.status,
+        errors: envelope.errors,
+        data: envelope.data,
+        meta: envelope.meta,
+      },
     )
   }
   return envelope
@@ -885,7 +956,8 @@ fn __ticket_comment(args) {
   if args?.resolution != nil && trim(to_string(args.resolution)) != "" {
     input["resolution"] = uppercase(to_string(args.resolution))
   }
-  const query = "mutation SubmitComment($trackerId: Int!, $ticketId: Int!, $input: SubmitCommentInput!) "
+  const query =
+    "mutation SubmitComment($trackerId: Int!, $ticketId: Int!, $input: SubmitCommentInput!) "
     + "{ submitComment(trackerId: $trackerId, ticketId: $ticketId, input: $input) { id created } }"
   return __graphql_request(
     args
@@ -924,7 +996,8 @@ fn __ticket_update_status(args) {
   if args?.resolution != nil && trim(to_string(args.resolution)) != "" {
     input["resolution"] = uppercase(to_string(args.resolution))
   }
-  const query = "mutation UpdateTicketStatus($trackerId: Int!, $ticketId: Int!, $input: UpdateStatusInput!) "
+  const query =
+    "mutation UpdateTicketStatus($trackerId: Int!, $ticketId: Int!, $input: UpdateStatusInput!) "
     + "{ updateTicketStatus(trackerId: $trackerId, ticketId: $ticketId, input: $input) { id created } }"
   return __graphql_request(
     args
@@ -1001,7 +1074,11 @@ fn __build_submit(args) {
     + "execute: $execute, visibility: $visibility) { id status note } }"
   return __graphql_request(
     args
-      + {api_base_url: args?.api_base_url ?? BUILDS_API_BASE_URL, query: query, variables: variables},
+      + {
+      api_base_url: args?.api_base_url ?? BUILDS_API_BASE_URL,
+      query: query,
+      variables: variables,
+    },
   )
 }
 
