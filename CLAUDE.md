@@ -1,19 +1,7 @@
 # CLAUDE.md
 
-SourceHut connector written in Harn. It verifies Ed25519-signed webhooks and
-exposes GraphQL plus raw HTTP helpers.
+See [AGENTS.md](AGENTS.md). It is the canonical guidance for this repo, and it
+links to the shared [connector authoring guide](https://github.com/burin-labs/harn/blob/main/docs/src/connectors/authoring.md).
 
-Shared Harn connector authoring rules are in the canonical guide:
-
-- https://github.com/burin-labs/harn/blob/main/docs/src/connectors/authoring.md
-
-Keep this file provider-specific. Add shared connector guidance to the Harn
-guide first.
-
-## Provider notes
-
-- Webhook event names use `x-sourcehut-event`; delivery IDs use `x-sourcehut-delivery` or
-  `x-srht-delivery`.
-- Signed SourceHut webhooks use Ed25519 public-key verification, not an HMAC signing secret.
-- Outbound calls default to the SourceHut GraphQL endpoint and accept OAuth2 tokens or PATs through
-  call args, `sourcehut/api-token`, `SOURCEHUT_TOKEN`, or `SOURCEHUT_API_TOKEN`.
+This is a regular file rather than a symlink: connector repos are published Harn
+packages, and the package installer rejects symlinks in package content.
