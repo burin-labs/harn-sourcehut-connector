@@ -248,13 +248,13 @@ pub fn call(harness: Harness, method, args = {}) {
   return __method_not_found(method)
 }
 
-fn __state(harness: HarnessRuntime) {
-  return harness.store_get(STATE_KEY)
+fn __state(runtime: HarnessRuntime) {
+  return runtime.store_get(STATE_KEY)
     ?? {initialized: false, active: false, bindings: {}, ctx: {}}
 }
 
-fn __set_state(harness: HarnessRuntime, state) {
-  harness.store_set(STATE_KEY, state)
+fn __set_state(runtime: HarnessRuntime, state) {
+  runtime.store_set(STATE_KEY, state)
   return state
 }
 
@@ -445,12 +445,12 @@ fn __webhook_public_key(harness: Harness, raw) {
   return nil
 }
 
-fn __secret_get_optional(harness: HarnessSecrets, secret_id) {
+fn __secret_get_optional(secrets: HarnessSecrets, secret_id) {
   if secret_id == nil || trim(to_string(secret_id)) == "" {
     return nil
   }
   const resolved = try {
-    harness.read(to_string(secret_id))
+    secrets.read(to_string(secret_id))
   }
   if is_err(resolved) {
     return nil
