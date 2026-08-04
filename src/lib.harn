@@ -134,8 +134,8 @@ pub fn payload_schema() {
 
 /** Initialize connector state with orchestrator context. */
 pub fn init(harness: Harness, ctx = nil) {
-  const next = __state(harness) + {initialized: true, ctx: ctx ?? {}}
-  __set_state(harness, next)
+  const next = __state(harness.runtime) + {initialized: true, ctx: ctx ?? {}}
+  __set_state(harness.runtime, next)
   return next
 }
 
@@ -158,8 +158,8 @@ pub fn activate(harness: Harness, bindings = []) {
     }
     by_id[binding_id] = binding + {binding_id: binding_id}
   }
-  const next = __state(harness) + {bindings: by_id, active: true}
-  __set_state(harness, next)
+  const next = __state(harness.runtime) + {bindings: by_id, active: true}
+  __set_state(harness.runtime, next)
   return {provider: PROVIDER_ID, bindings: len(by_id.keys())}
 }
 
@@ -248,18 +248,13 @@ pub fn call(harness: Harness, method, args = {}) {
   return __method_not_found(method)
 }
 
-fn __state(harness: Harness) {
-  return harness.runtime.store_get(STATE_KEY)
-    ?? {
-    initialized: false,
-    active: false,
-    bindings: {},
-    ctx: {},
-  }
+fn __state(harness: HarnessRuntime) {
+  return harness.store_get(STATE_KEY)
+    ?? {initialized: false, active: false, bindings: {}, ctx: {}}
 }
 
-fn __set_state(harness: Harness, state) {
-  harness.runtime.store_set(STATE_KEY, state)
+fn __set_state(harness: HarnessRuntime, state) {
+  harness.store_set(STATE_KEY, state)
   return state
 }
 
@@ -424,7 +419,7 @@ fn __signed_surface(raw) {
  */
 @complexity(allow)
 fn __webhook_public_key(harness: Harness, raw) {
-  const state = __state(harness)
+  const state = __state(harness.runtime)
   const ctx_key = state?.ctx?.public_key ?? state?.ctx?.webhook_public_key
     ?? state?.ctx?.secrets
     ?.public_key
@@ -443,19 +438,19 @@ fn __webhook_public_key(harness: Harness, raw) {
   if bound != nil && trim(to_string(bound)) != "" {
     return to_string(bound)
   }
-  const default_key = __secret_get_optional(harness, PROVIDER_ID + "/webhook-public-key")
+  const default_key = __secret_get_optional(harness.secrets, PROVIDER_ID + "/webhook-public-key")
   if default_key != nil && trim(to_string(default_key)) != "" {
     return default_key
   }
   return nil
 }
 
-fn __secret_get_optional(harness: Harness, secret_id) {
+fn __secret_get_optional(harness: HarnessSecrets, secret_id) {
   if secret_id == nil || trim(to_string(secret_id)) == "" {
     return nil
   }
   const resolved = try {
-    harness.secrets.read(to_string(secret_id))
+    harness.read(to_string(secret_id))
   }
   if is_err(resolved) {
     return nil
@@ -682,7 +677,7 @@ fn __outbound_access_token(harness: Harness, args) {
   if args?.secrets?.api_token != nil && trim(to_string(args.secrets.api_token)) != "" {
     return args.secrets.api_token
   }
-  const stored = __secret_get_optional(harness, PROVIDER_ID + "/api-token")
+  const stored = __secret_get_optional(harness.secrets, PROVIDER_ID + "/api-token")
   if stored != nil && trim(to_string(stored)) != "" {
     return stored
   }
@@ -773,7 +768,7 @@ fn __acquire_rate_limit(harness: Harness, args, cfg) {
     return Ok({allowed: true, state: nil})
   }
   const scope = __rate_limit_scope(args, cfg)
-  const current = __state(harness)
+  const current = __state(harness.runtime)
   let rate_limits = current?.rate_limits ?? {}
   const bucket = rate_limit_token_bucket(
     harness.clock,
@@ -782,7 +777,7 @@ fn __acquire_rate_limit(harness: Harness, args, cfg) {
     args?.now_ms,
   )
   rate_limits[scope] = bucket.state
-  __set_state(harness, current + {rate_limits: rate_limits})
+  __set_state(harness.runtime, current + {rate_limits: rate_limits})
   if !bucket.allowed {
     return __err_meta(
       "rate_limited",
@@ -857,11 +852,11 @@ fn __api_request(harness: Harness, args) {
     }
     return __err_meta(
       code,
-      PROVIDER_ID + " API request failed with status " + to_string(response?.status),
-      {status: response?.status, meta: meta},
+      PROVIDER_ID + " API request failed with status " + to_string(response.status),
+      {status: response.status, meta: meta},
     )
   }
-  if response?.json == nil && trim(response?.body ?? "") == "" {
+  if response?.json == nil && trim(response.body ?? "") == "" {
     if __include_meta(args ?? {}) {
       return {ok: true, status: response.status, headers: response.headers, body: "", meta: meta}
     }
