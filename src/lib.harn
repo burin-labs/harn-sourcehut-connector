@@ -187,7 +187,12 @@ pub fn normalize_inbound(harness: Harness, raw) {
     return __reject_err(unwrap_err(signed))
   }
   const body_text = unwrap(signed)
-  const verified = __verify_signature(harness, raw, headers, body_text)
+  const verified = __verify_signature(
+    {secrets: harness.secrets, runtime: harness.runtime},
+    raw,
+    headers,
+    body_text,
+  )
   if is_err(verified) {
     return __reject_err(unwrap_err(verified))
   }
@@ -350,11 +355,26 @@ fn __sourcehut_event_alias(event) {
 }
 
 @complexity(allow)
-fn __verify_signature(harness: Harness, raw, headers, body_text) {
-  return __verify_ed25519(harness, raw, headers, body_text)
+fn __verify_signature(
+  harness: {secrets: HarnessSecrets, runtime: HarnessRuntime},
+  raw,
+  headers,
+  body_text,
+) {
+  return __verify_ed25519(
+    {secrets: harness.secrets, runtime: harness.runtime},
+    raw,
+    headers,
+    body_text,
+  )
 }
 
-fn __verify_ed25519(harness: Harness, raw, headers, body_text) {
+fn __verify_ed25519(
+  harness: {secrets: HarnessSecrets, runtime: HarnessRuntime},
+  raw,
+  headers,
+  body_text,
+) {
   const binding_id = raw?.metadata?.binding_id ?? raw?.binding_id
   if binding_id == nil || trim(to_string(binding_id)) == "" {
     return __err(
@@ -362,7 +382,7 @@ fn __verify_ed25519(harness: Harness, raw, headers, body_text) {
       "request did not include a binding_id; cannot resolve public key",
     )
   }
-  const public_key = __webhook_public_key(harness, raw)
+  const public_key = __webhook_public_key({secrets: harness.secrets, runtime: harness.runtime}, raw)
   // Fail-closed: refuse delivery when no public key is configured for this binding.
   if public_key == nil || trim(to_string(public_key)) == "" {
     return __err("missing_signature", "no webhook public_key configured for this binding")
@@ -418,7 +438,7 @@ fn __signed_surface(raw) {
  * envelope or implicit binding resolution.
  */
 @complexity(allow)
-fn __webhook_public_key(harness: Harness, raw) {
+fn __webhook_public_key(harness: {secrets: HarnessSecrets, runtime: HarnessRuntime}, raw) {
   const state = __state(harness.runtime)
   const ctx_key = state?.ctx?.public_key ?? state?.ctx?.webhook_public_key
     ?? state?.ctx?.secrets
@@ -648,14 +668,17 @@ fn __normalized_headers(headers) {
 }
 
 @complexity(allow)
-fn __outbound_config(harness: Harness, args) {
+fn __outbound_config(harness: {env: HarnessEnv, secrets: HarnessSecrets}, args) {
   const env_base = ENV_PREFIX + "_API_BASE_URL"
   const api_base_url = args?.api_base_url ?? env_str(harness.env, env_base) ?? DEFAULT_API_BASE_URL
-  const access_token = __outbound_access_token(harness, args ?? {})
+  const access_token = __outbound_access_token(
+    {env: harness.env, secrets: harness.secrets},
+    args ?? {},
+  )
   return Ok({api_base_url: to_string(api_base_url), access_token: access_token})
 }
 
-fn __outbound_access_token(harness: Harness, args) {
+fn __outbound_access_token(harness: {env: HarnessEnv, secrets: HarnessSecrets}, args) {
   if args?.access_token != nil && trim(to_string(args.access_token)) != "" {
     return args.access_token
   }
@@ -763,7 +786,7 @@ fn __rate_limit_scope(args, cfg) {
   return to_string(args?.rate_limit_scope ?? args?.scope_key ?? cfg.api_base_url)
 }
 
-fn __acquire_rate_limit(harness: Harness, args, cfg) {
+fn __acquire_rate_limit(harness: {clock: HarnessClock, runtime: HarnessRuntime}, args, cfg) {
   if !__rate_limit_enabled(args) {
     return Ok({allowed: true, state: nil})
   }
@@ -808,12 +831,16 @@ fn __is_rate_limited_response(response) {
 
 @complexity(allow)
 fn __api_request(harness: Harness, args) {
-  const config = __outbound_config(harness, args ?? {})
+  const config = __outbound_config({env: harness.env, secrets: harness.secrets}, args ?? {})
   if is_err(config) {
     return config
   }
   const cfg = unwrap(config)
-  const permit = __acquire_rate_limit(harness, args ?? {}, cfg)
+  const permit = __acquire_rate_limit(
+    {clock: harness.clock, runtime: harness.runtime},
+    args ?? {},
+    cfg,
+  )
   if is_err(permit) {
     return permit
   }
