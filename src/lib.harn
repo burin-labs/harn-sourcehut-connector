@@ -297,7 +297,7 @@ fn __reject_err(err) {
     401
   } else if code == "missing_binding_id" || code == "missing_body"
     || code
-    == "invalid_body" {
+      == "invalid_body" {
     400
   } else {
     400
@@ -321,8 +321,7 @@ fn __base_event(payload, headers) {
     return __sourcehut_event_alias(from_header)
   }
   const raw_event = payload?.event ?? payload?.webhook?.event ?? payload?.event_name
-    ?? payload
-    ?.object_kind
+    ?? payload?.object_kind
     ?? payload?.type
     ?? payload?.action
   return __sourcehut_event_alias(raw_event)
@@ -388,10 +387,7 @@ fn __verify_ed25519(
     return __err("missing_signature", "no webhook public_key configured for this binding")
   }
   const signature = __header(headers, SIGNATURE_HEADER) ?? __header(headers, "x-srht-signature")
-    ?? __header(
-    headers,
-    "x-signature-ed25519",
-  )
+    ?? __header(headers, "x-signature-ed25519")
   if signature == nil || signature == "" {
     return __err(
       "missing_signature",
@@ -441,8 +437,7 @@ fn __signed_surface(raw) {
 fn __webhook_public_key(harness: {secrets: HarnessSecrets, runtime: HarnessRuntime}, raw) {
   const state = __state(harness.runtime)
   const ctx_key = state?.ctx?.public_key ?? state?.ctx?.webhook_public_key
-    ?? state?.ctx?.secrets
-    ?.public_key
+    ?? state?.ctx?.secrets?.public_key
   if ctx_key != nil && trim(to_string(ctx_key)) != "" {
     return to_string(ctx_key)
   }
@@ -453,8 +448,7 @@ fn __webhook_public_key(harness: {secrets: HarnessSecrets, runtime: HarnessRunti
   const bindings = state?.bindings ?? {}
   const binding = bindings.get(binding_id)
   const bound = binding?.public_key ?? binding?.webhook_public_key ?? binding?.secrets?.public_key
-    ?? binding
-    ?.config?.public_key
+    ?? binding?.config?.public_key
   if bound != nil && trim(to_string(bound)) != "" {
     return to_string(bound)
   }
@@ -535,8 +529,7 @@ fn __build_summary(base_event, payload) {
 
 fn __occurred_at(payload, raw) {
   return raw?.occurred_at ?? payload?.webhook?.date ?? payload?.date ?? payload?.updated_at
-    ?? payload
-    ?.created_at
+    ?? payload?.created_at
     ?? payload?.timestamp
 }
 
@@ -574,8 +567,7 @@ fn __repository(payload) {
 
 fn __actor(payload) {
   const actor = payload?.sender ?? payload?.user ?? payload?.actor ?? payload?.pusher
-    ?? payload
-    ?.submitter
+    ?? payload?.submitter
     ?? payload?.owner
     ?? payload?.webhook?.sender
     ?? payload?.webhook?.user
@@ -590,8 +582,7 @@ fn __actor(payload) {
 
 fn __resource(payload) {
   return payload?.pull_request ?? payload?.pullrequest ?? payload?.ticket ?? payload?.tracker
-    ?? payload
-    ?.label
+    ?? payload?.label
     ?? payload?.job
     ?? payload?.email
     ?? payload?.patchset
@@ -609,10 +600,10 @@ fn __resource(payload) {
     ?? payload?.object_attributes
     ?? payload?.webhook
     ?? {
-    revision: payload?.revision,
-    changed_paths: payload?.changed_paths,
-    commits: payload?.commits,
-  }
+      revision: payload?.revision,
+      changed_paths: payload?.changed_paths,
+      commits: payload?.commits,
+    }
 }
 
 fn __dedupe_key(base_event, payload, raw, headers, body_text) {
@@ -629,9 +620,7 @@ fn __dedupe_key(base_event, payload, raw, headers, body_text) {
   const received_at = raw?.received_at ?? raw?.occurred_at ?? ""
   const body_b64 = raw?.body_base64 ?? body_text
   return PROVIDER_ID + ":" + __normalize_kind(base_event) + ":"
-    + sha256(
-    to_string(body_b64) + "|" + to_string(received_at) + "|" + to_string(binding_id),
-  )
+    + sha256(to_string(body_b64) + "|" + to_string(received_at) + "|" + to_string(binding_id))
 }
 
 fn __delivery_id(payload, headers) {
@@ -724,26 +713,14 @@ fn __int_header(headers, name) {
 
 fn __rate_limit_meta(headers) {
   const retry_after_seconds = __int_header(headers, "retry-after")
-    ?? __int_header(
-    headers,
-    "x-ratelimit-retry-after",
-  )
+    ?? __int_header(headers, "x-ratelimit-retry-after")
   return {
     requests_limit: __int_header(headers, "x-ratelimit-limit")
-      ?? __int_header(
-      headers,
-      "ratelimit-limit",
-    ),
+      ?? __int_header(headers, "ratelimit-limit"),
     requests_remaining: __int_header(headers, "x-ratelimit-remaining")
-      ?? __int_header(
-      headers,
-      "ratelimit-remaining",
-    ),
+      ?? __int_header(headers, "ratelimit-remaining"),
     requests_reset: __int_header(headers, "x-ratelimit-reset")
-      ?? __int_header(
-      headers,
-      "ratelimit-reset",
-    ),
+      ?? __int_header(headers, "ratelimit-reset"),
     retry_after_seconds: retry_after_seconds,
     retry_after_ms: if retry_after_seconds == nil {
       nil
@@ -757,10 +734,7 @@ fn __response_meta(response) {
   return {
     status: response?.status,
     request_id: __header(response?.headers ?? {}, "x-request-id")
-      ?? __header(
-      response?.headers ?? {},
-      "x-srht-request-id",
-    ),
+      ?? __header(response?.headers ?? {}, "x-srht-request-id"),
     rate_limit: __rate_limit_meta(response?.headers ?? {}),
   }
 }
@@ -909,11 +883,11 @@ fn __graphql_request(harness: Harness, args) {
     harness,
     args
       + {
-      method: "POST",
-      path: args?.path ?? "",
-      body: graphql_request_body(args.query, args?.variables ?? {}, args ?? {}),
-      include_meta: true,
-    },
+        method: "POST",
+        path: args?.path ?? "",
+        body: graphql_request_body(args.query, args?.variables ?? {}, args ?? {}),
+        include_meta: true,
+      },
   )
   if is_err(raw) {
     return raw
@@ -996,10 +970,10 @@ fn __ticket_comment(harness: Harness, args) {
     harness,
     args
       + {
-      api_base_url: args?.api_base_url ?? TODO_API_BASE_URL,
-      query: query,
-      variables: {trackerId: unwrap(tracker), ticketId: unwrap(ticket), input: input},
-    },
+        api_base_url: args?.api_base_url ?? TODO_API_BASE_URL,
+        query: query,
+        variables: {trackerId: unwrap(tracker), ticketId: unwrap(ticket), input: input},
+      },
   )
 }
 
@@ -1037,10 +1011,10 @@ fn __ticket_update_status(harness: Harness, args) {
     harness,
     args
       + {
-      api_base_url: args?.api_base_url ?? TODO_API_BASE_URL,
-      query: query,
-      variables: {trackerId: unwrap(tracker), ticketId: unwrap(ticket), input: input},
-    },
+        api_base_url: args?.api_base_url ?? TODO_API_BASE_URL,
+        query: query,
+        variables: {trackerId: unwrap(tracker), ticketId: unwrap(ticket), input: input},
+      },
   )
 }
 
@@ -1064,10 +1038,10 @@ fn __build_get(harness: Harness, args) {
     harness,
     args
       + {
-      api_base_url: args?.api_base_url ?? BUILDS_API_BASE_URL,
-      query: query,
-      variables: {id: unwrap(job)},
-    },
+        api_base_url: args?.api_base_url ?? BUILDS_API_BASE_URL,
+        query: query,
+        variables: {id: unwrap(job)},
+      },
   )
 }
 
@@ -1112,10 +1086,10 @@ fn __build_submit(harness: Harness, args) {
     harness,
     args
       + {
-      api_base_url: args?.api_base_url ?? BUILDS_API_BASE_URL,
-      query: query,
-      variables: variables,
-    },
+        api_base_url: args?.api_base_url ?? BUILDS_API_BASE_URL,
+        query: query,
+        variables: variables,
+      },
   )
 }
 
