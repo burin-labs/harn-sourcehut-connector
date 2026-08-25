@@ -188,9 +188,7 @@ pipeline test_sourcehut_connector(harness: Harness, task) {
       binding_id: "primary",
       body_text: "{bad json",
       headers: headers
-        + {
-        "x-sourcehut-signature": "ed25519=" + ed25519_sign(keypair.private, "{bad json"),
-      },
+        + {"x-sourcehut-signature": "ed25519=" + ed25519_sign(keypair.private, "{bad json")},
     },
   )
   assert_eq(invalid_json.type, "reject", "invalid json rejects")
@@ -201,10 +199,7 @@ pipeline test_sourcehut_connector(harness: Harness, task) {
       body_text: "{\"event\":\"repo.push_extra\"}",
       headers: {
         "x-sourcehut-signature": "ed25519="
-          + ed25519_sign(
-          keypair.private,
-          "{\"event\":\"repo.push_extra\"}",
-        ),
+          + ed25519_sign(keypair.private, "{\"event\":\"repo.push_extra\"}"),
       },
     },
   )
