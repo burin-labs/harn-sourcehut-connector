@@ -10,7 +10,7 @@ import {
 } from "../src/lib"
 
 @complexity(allow)
-pipeline test_sourcehut_connector(harness: Harness, task) {
+pipeline test_sourcehut_connector(harness: Harness, task: any) {
   harness.net.egress_policy({allow: ["git.sr.ht", "todo.sr.ht", "builds.sr.ht"], default: "deny"})
   shutdown(harness)
   assert_eq(provider_id(), "sourcehut", "provider id")
