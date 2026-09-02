@@ -20,6 +20,20 @@ provider-specific notes and local hazards here.
 - Outbound calls default to the SourceHut GraphQL endpoint and accept OAuth2 tokens or PATs through
   call args, `sourcehut/api-token`, `SOURCEHUT_TOKEN`, or `SOURCEHUT_API_TOKEN`.
 
+## Pull request titles
+
+Use `[Area] Sentence case`. The area is one of `Connector`, `CI`, or `Docs`.
+
+- `[Connector] Reject webhook deliveries with a stale timestamp`
+- `[CI] Repin the shared Harn package workflow`
+- `[Docs] Describe the poll cursor contract`
+
+Keep the title on one line, under about 70 characters. Say what changed, not
+which files moved. Capitalize the first word after the bracket and leave the
+rest in sentence case.
+
+`CONTRIBUTING.md` states the contribution policy for this repository.
+
 <!-- BEGIN HARN SHARED AGENT CONTRACT: managed by harn-bump-fleet -->
 
 ## Ecosystem working agreement
