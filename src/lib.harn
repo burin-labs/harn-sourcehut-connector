@@ -1,6 +1,7 @@
 import { env_str } from "std/config"
 import {
   connector_http_json,
+  connector_lifecycle,
   paginate_cursor,
   rate_limit_token_bucket,
 } from "std/connectors/shared"
@@ -9,6 +10,8 @@ import { graphql_normalize_response, graphql_request_body } from "std/graphql"
 const PROVIDER_ID = "sourcehut"
 
 const STATE_KEY = "harn-sourcehut-connector.state"
+
+const lifecycle = connector_lifecycle(PROVIDER_ID, STATE_KEY)
 
 const DEFAULT_API_BASE_URL = "https://git.sr.ht/query"
 
@@ -134,33 +137,12 @@ pub fn payload_schema() {
 
 /** Initialize connector state with orchestrator context. */
 pub fn init(harness: Harness, ctx: any = nil) {
-  const next = __state(harness.runtime) + {initialized: true, ctx: ctx ?? {}}
-  __set_state(harness.runtime, next)
-  return next
+  return lifecycle.init(harness.runtime, ctx)
 }
 
 /** Activate configured trigger bindings. */
 pub fn activate(harness: Harness, bindings: any = []) {
-  let by_id = {}
-  let seen_paths = {}
-  for binding in bindings ?? [] {
-    const binding_id = (binding?.binding_id ?? binding?.id ?? "binding-")
-      + to_string(len(by_id.keys()))
-    const path = binding?.path ?? binding?.match?.path
-    if path != nil && path != "" {
-      if seen_paths.get(path) {
-        return __err(
-          "activation",
-          PROVIDER_ID + " connector path `" + path + "` is configured by multiple bindings",
-        )
-      }
-      seen_paths[path] = true
-    }
-    by_id[binding_id] = binding + {binding_id: binding_id}
-  }
-  const next = __state(harness.runtime) + {bindings: by_id, active: true}
-  __set_state(harness.runtime, next)
-  return {provider: PROVIDER_ID, bindings: len(by_id.keys())}
+  return lifecycle.activate(harness.runtime, bindings)
 }
 
 /**
@@ -172,8 +154,7 @@ pub fn activate(harness: Harness, bindings: any = []) {
  * host responsibility.
  */
 pub fn shutdown(harness: Harness) {
-  harness.runtime.store_delete(STATE_KEY)
-  return {provider: PROVIDER_ID, active: false}
+  return lifecycle.shutdown(harness.runtime)
 }
 
 @complexity(allow)
@@ -254,8 +235,7 @@ pub fn call(harness: Harness, method: any, args: any = {}) {
 }
 
 fn __state(runtime: HarnessRuntime) {
-  return runtime.store_get(STATE_KEY)
-    ?? {initialized: false, active: false, bindings: {}, ctx: {}}
+  return lifecycle.state(runtime)
 }
 
 fn __set_state(runtime: HarnessRuntime, state: any) {
