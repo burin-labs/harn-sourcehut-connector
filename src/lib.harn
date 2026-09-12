@@ -188,7 +188,7 @@ pub fn normalize_inbound(harness: Harness, raw: any) {
   }
   const body_text = unwrap(signed)
   const verified = __verify_signature(
-    {secrets: harness.secrets, runtime: harness.runtime},
+    pick(harness, ["secrets", "runtime"]),
     raw,
     headers,
     body_text,
@@ -360,12 +360,7 @@ fn __verify_signature(
   headers: any,
   body_text: any,
 ) {
-  return __verify_ed25519(
-    {secrets: harness.secrets, runtime: harness.runtime},
-    raw,
-    headers,
-    body_text,
-  )
+  return __verify_ed25519(pick(harness, ["secrets", "runtime"]), raw, headers, body_text)
 }
 
 fn __verify_ed25519(
@@ -381,7 +376,7 @@ fn __verify_ed25519(
       "request did not include a binding_id; cannot resolve public key",
     )
   }
-  const public_key = __webhook_public_key({secrets: harness.secrets, runtime: harness.runtime}, raw)
+  const public_key = __webhook_public_key(pick(harness, ["secrets", "runtime"]), raw)
   // Fail-closed: refuse delivery when no public key is configured for this binding.
   if public_key == nil || trim(to_string(public_key)) == "" {
     return __err("missing_signature", "no webhook public_key configured for this binding")
@@ -667,10 +662,7 @@ fn __normalized_headers(headers: any) {
 fn __outbound_config(harness: {env: HarnessEnv, secrets: HarnessSecrets}, args: any) {
   const env_base = ENV_PREFIX + "_API_BASE_URL"
   const api_base_url = args?.api_base_url ?? env_str(harness.env, env_base) ?? DEFAULT_API_BASE_URL
-  const access_token = __outbound_access_token(
-    {env: harness.env, secrets: harness.secrets},
-    args ?? {},
-  )
+  const access_token = __outbound_access_token(pick(harness, ["env", "secrets"]), args ?? {})
   return Ok({api_base_url: to_string(api_base_url), access_token: access_token})
 }
 
@@ -816,16 +808,12 @@ fn __is_rate_limited_response(response: any) {
 
 @complexity(allow)
 fn __api_request(harness: Harness, args: any) {
-  const config = __outbound_config({env: harness.env, secrets: harness.secrets}, args ?? {})
+  const config = __outbound_config(pick(harness, ["env", "secrets"]), args ?? {})
   if is_err(config) {
     return config
   }
   const cfg = unwrap(config)
-  const permit = __acquire_rate_limit(
-    {clock: harness.clock, runtime: harness.runtime},
-    args ?? {},
-    cfg,
-  )
+  const permit = __acquire_rate_limit(pick(harness, ["clock", "runtime"]), args ?? {}, cfg)
   if is_err(permit) {
     return permit
   }
